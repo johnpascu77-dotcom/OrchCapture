@@ -5,8 +5,8 @@
 
 namespace
 {
-    constexpr int kTimerIntervalMs = 1500;
-    constexpr int kConnectTimeoutMs = 100;
+    constexpr int kPollMs = 3000;          // worker loop interval
+    constexpr int kConnectTimeoutMs = 300; // blocking connect - worker thread only, never the message thread
 
     void sendJson (juce::InterprocessConnection& connection, const juce::var& value)
     {
@@ -16,28 +16,35 @@ namespace
 }
 
 // ===================== connection / server objects =====================
+//
+// callbacksOnMessageThread == false: every connection callback arrives on the
+// connection's own background thread, so message parsing (a take can be a few
+// thousand notes of JSON) never touches the host message thread. Shared state
+// is mutex-guarded for that reason.
 
 class OrchCaptureLink::ClientConnection : public juce::InterprocessConnection
 {
 public:
-    ClientConnection() : juce::InterprocessConnection (true) {}
+    explicit ClientConnection (OrchCaptureLink& o) : juce::InterprocessConnection (false), owner (o) {}
     ~ClientConnection() override { disconnect(); }
 
-    void connectionMade() override {}
-    void connectionLost() override {}
+    void connectionMade() override { owner.clientConnected.store (true); }
+    void connectionLost() override { owner.clientConnected.store (false); }
     void messageReceived (const juce::MemoryBlock&) override {} // coordinator never replies to clients
+
+private:
+    OrchCaptureLink& owner;
 };
 
 class OrchCaptureLink::CoordinatorConnection : public juce::InterprocessConnection
 {
 public:
     explicit CoordinatorConnection (OrchCaptureLink& ownerIn)
-        : juce::InterprocessConnection (true), owner (ownerIn) {}
+        : juce::InterprocessConnection (false), owner (ownerIn) {}
 
     ~CoordinatorConnection() override { disconnect(); }
 
     void connectionMade() override {}
-
     void connectionLost() override { owner.onClientGone (this); }
 
     void messageReceived (const juce::MemoryBlock& message) override
@@ -74,22 +81,36 @@ private:
 // ============================== link ==================================
 
 OrchCaptureLink::OrchCaptureLink (OrchCaptureAudioProcessor& p)
-    : processor (p)
+    : juce::Thread ("OrchCapture link"), processor (p)
 {
     localUid = juce::Uuid().toString();
-    startTimer (kTimerIntervalMs);
+    startThread (juce::Thread::Priority::background);
 }
 
 OrchCaptureLink::~OrchCaptureLink()
 {
-    stopTimer();
+    signalThreadShouldExit();
+    notify();
+    stopThread (3000);
 
-    // Tear connections down while `this` is still fully alive - any deferred
-    // connectionLost callback then finds a null weak reference and no-ops.
+    // run() already tore these down on its way out; harmless to repeat.
     client.reset();
+    teardownServer();
+}
 
+juce::File OrchCaptureLink::lockFile()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory)
+               .getChildFile ("orchcapture-coordinator.lock");
+}
+
+void OrchCaptureLink::teardownServer()
+{
     if (server != nullptr)
+    {
         server->stop();
+        server.reset();
+    }
 
     {
         std::lock_guard<std::mutex> lock (lanesMutex);
@@ -97,10 +118,30 @@ OrchCaptureLink::~OrchCaptureLink()
         lanes.clear();
     }
 
-    server.reset();
+    if (wroteLockFile)
+    {
+        lockFile().deleteFile();
+        wroteLockFile = false;
+    }
 }
 
-// ---- mode reconciliation (timer / message thread) ----
+// ---- worker thread ----
+
+void OrchCaptureLink::run()
+{
+    while (! threadShouldExit())
+    {
+        reconcileMode();
+
+        if (mode.load() != Mode::Coordinator)
+            serviceClient();
+
+        wait (kPollMs);
+    }
+
+    client.reset();
+    teardownServer();
+}
 
 void OrchCaptureLink::reconcileMode()
 {
@@ -111,21 +152,20 @@ void OrchCaptureLink::reconcileMode()
         if (client != nullptr)
         {
             client.reset();
+            clientConnected.store (false);
             clientWasConnected = false;
         }
 
         if (server == nullptr)
         {
             auto candidate = std::make_unique<CoordinatorServer> (*this);
-            if (candidate->beginWaitingForSocket (kPort, "127.0.0.1"))
+            if (candidate->beginWaitingForSocket (kPort))
             {
                 server = std::move (candidate);
                 mode.store (Mode::Coordinator);
             }
             else
             {
-                // Someone else already holds the port - run as an ordinary
-                // client, and keep retrying so we can take over if they leave.
                 mode.store (Mode::CoordinatorPortBusy);
             }
         }
@@ -134,48 +174,44 @@ void OrchCaptureLink::reconcileMode()
             mode.store (Mode::Coordinator);
         }
 
-        if (server == nullptr && client == nullptr)
+        if (server != nullptr)
         {
-            client = std::make_unique<ClientConnection>();
-            clientWasConnected = false;
-            clientLastPushedGeneration = -1;
+            if (! lockFile().existsAsFile())
+                lockFile().replaceWithText (juce::String (kPort));
+            wroteLockFile = true;
         }
     }
     else
     {
-        if (server != nullptr)
-        {
-            server->stop();
-            {
-                std::lock_guard<std::mutex> lock (lanesMutex);
-                serverConnections.clear();
-                lanes.clear();
-            }
-            server.reset();
-        }
+        if (server != nullptr || wroteLockFile)
+            teardownServer();
 
         mode.store (Mode::Client);
 
         if (client == nullptr)
         {
-            client = std::make_unique<ClientConnection>();
+            client = std::make_unique<ClientConnection> (*this);
             clientWasConnected = false;
             clientLastPushedGeneration = -1;
         }
     }
 }
 
-void OrchCaptureLink::timerCallback()
+void OrchCaptureLink::serviceClient()
 {
-    reconcileMode();
-
     if (client == nullptr)
         return;
 
     if (! client->isConnected())
     {
+        clientConnected.store (false);
         clientWasConnected = false;
-        client->connectToSocket ("127.0.0.1", kPort, kConnectTimeoutMs);
+
+        // The gate: only reach for the socket when a coordinator has announced
+        // itself. No coordinator on the rig == one cheap file check per poll.
+        if (lockFile().existsAsFile())
+            client->connectToSocket ("127.0.0.1", kPort, kConnectTimeoutMs);
+
         return;
     }
 
@@ -226,7 +262,7 @@ void OrchCaptureLink::pushLaneFromClient (bool includeNotes)
     sendJson (*client, juce::var (obj));
 }
 
-// ---- coordinator side ----
+// ---- coordinator side (connection threads) ----
 
 void OrchCaptureLink::registerServerConnection (std::unique_ptr<CoordinatorConnection> connection)
 {
@@ -287,12 +323,7 @@ void OrchCaptureLink::onClientGone (CoordinatorConnection* connection)
     });
 }
 
-// ---- editor queries ----
-
-bool OrchCaptureLink::isClientConnected() const
-{
-    return client != nullptr && client->isConnected();
-}
+// ---- editor queries (message thread) ----
 
 double OrchCaptureLink::getSessionTempoBpm() const
 {

@@ -1,7 +1,8 @@
 # OrchCapture — Design
 
 Date: 2026-08-30
-Status: Phase 1 + 1b built & live-tested. Phase 2 (coordinator) built, not yet live-tested.
+Status: Phase 1 + 1b built & live-tested. Phase 2 (coordinator) built; first live test froze
+Bitwig (message-thread socket work), reworked onto a background thread (`9cb45e9`) — needs re-test.
 Repo: `C:\AudioDev\Repos\OrchCapture`. Plugin code `Ocap`, VST3, MIDI effect.
 GitHub: `johnpascu77-dotcom/OrchCapture` (public, like the rest of the Orch family).
 
@@ -162,24 +163,33 @@ the keyswitch events, aligned to the performance take by track name + onset ppq.
 
 ## 6. Coordinator (Phase 2)
 
-`OrchCaptureLink` (one per instance) turns the rig's ~50 instances into a single export action.
+`OrchCaptureLink` (one per instance) turns the rig's ~50–100 instances into a single export action.
+
+**All socket work is on `OrchCaptureLink`'s own background `juce::Thread` — never the host message
+thread.** A rig has dozens of instances; a blocking connect on each, on the one shared message
+thread, freezes the host (it did, 2026-08-30, when the link was a `juce::Timer`).
+
+### Discovery — a lock file
+
+The coordinator writes `<temp>/orchcapture-coordinator.lock` while it holds port 47826. A client
+only calls `connectToSocket` when that file exists, so the common "no coordinator on the rig" state
+costs **one `File::existsAsFile()` per 3 s poll** and no socket work at all.
 
 ### Roles
 
-- `coordinator` param **off** → the instance runs as a **client**: a 1.5 s timer keeps a
-  `juce::InterprocessConnection` connected to `127.0.0.1:47826`, and pushes a `lane` message
-  (`uid`, track name, `tapRole`, tempo, `ksExportMode`, and the full note list as compact JSON)
-  on connect and on every completed take (transport-stop edge / `takeGeneration` change). Between
-  takes it sends a lightweight `status` (counts + playing) each tick.
-- `coordinator` param **on** → the instance binds port 47826 as an `InterprocessConnectionServer`
-  and collects every client's lane into a `uid → Lane` map. If the port is already held (another
-  instance is the coordinator) it reports `CoordinatorPortBusy` and keeps retrying so it can take
-  over if that instance leaves.
+- `coordinator` param **off** → **client**: the worker thread, when the lock file exists, keeps a
+  `juce::InterprocessConnection` (callbacks off the message thread) connected to `127.0.0.1:47826`
+  and pushes a `lane` message (`uid`, track name, `tapRole`, tempo, `ksExportMode`, and the full
+  note list as compact JSON) on connect and on every completed take (transport-stop edge /
+  `takeGeneration` change). Between takes it sends a lightweight `status` (counts + playing).
+- `coordinator` param **on** → binds port 47826 as an `InterprocessConnectionServer`, writes the
+  lock file, and collects every client's lane into a `uid → Lane` map. Port already held →
+  `CoordinatorPortBusy`, keeps retrying so it can take over if that instance leaves.
 
-All connection callbacks are on the message thread (`InterprocessConnection(true)`); the lane map
-and connection list are still mutex-guarded because `createConnectionObject` runs on the server's
-listener thread. Same local-socket pattern as MC's `PatternSyncServer` / `McpBridgeServer` and the
-Transport Companion.
+`InterprocessConnection(false)` — every connection callback (including the multi-thousand-note JSON
+parse) is on the connection's own thread; `lanes` / `serverConnections` are mutex-guarded. Same
+local-socket pattern as MC's `PatternSyncServer` / `McpBridgeServer` and the Transport Companion,
+minus the message-thread timer.
 
 ### Merged export
 
@@ -192,13 +202,20 @@ tracks (`planNoteTracks` per lane, honouring each lane's own `ksExportMode`), gr
 in first-seen order, Performance (`tapRole` 0) before Articulation (`tapRole` 1) within a group. So
 Dorico / the music21 script get `Violin I`, `Violin I KS`, `Viola`, `Viola KS`, … already paired.
 
-### Phase 2 risks to verify live (Bitwig)
+### Phase 2 status
+
+Built `a32f007`. **First live test froze Bitwig** — the link was a `juce::Timer`, so every
+instance's blocking `connectToSocket` ran on the shared host message thread; with ~50–100 instances
+and no coordinator, that starved the message thread. Fixed `9cb45e9`: link moved to its own
+`juce::Thread`, lock-file discovery, callbacks off the message thread. **Not yet re-tested live.**
+
+### Phase 2 risks still to verify (Bitwig)
 
 1. Localhost `InterprocessConnectionServer` across sandboxed plugin instances (PatternSync /
    McpBridge / Transport Companion all prove this works — expected fine).
-2. ~50 clients on one server; JSON take payloads (~a few thousand notes each) on connect / take-end.
-3. The 100 ms `connectToSocket` retry on the client's message-thread timer while no coordinator
-   exists — should be imperceptible, but watch for editor jank on a big session.
+2. ~50–100 clients on one server; JSON take payloads (a few thousand notes each) on connect / take-end.
+3. No message-thread stall at the full instance count (the whole point of the `9cb45e9` rework —
+   confirm it holds).
 
 ---
 

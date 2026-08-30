@@ -13,20 +13,27 @@ class OrchCaptureAudioProcessor;
 
 // Phase 2 coordinator link. Every OrchCapture instance owns one.
 //
-// - When this instance's `coordinator` parameter is OFF: runs as a client,
-//   reconnecting to 127.0.0.1:47826 on a timer and pushing its lane (track
-//   name, role, and - on every completed take - the full note list) to
-//   whichever instance is the coordinator.
-// - When `coordinator` is ON: binds port 47826 as the server, collecting every
-//   client's lane. "Export All" then merges the coordinator's own take plus
-//   every collected lane into one multi-track SMF (matched Performance / "<name>
-//   KS" pairs). If the port is already taken (another instance is the
-//   coordinator) it falls back to running as a client and reports that.
+// ALL socket work runs on this object's own background thread - NEVER the host
+// message thread - because an orchestral rig has ~50-100 instances and a
+// blocking connect on each, on the one shared message thread, freezes the host
+// (learned the hard way 2026-08-30: OrchCaptureLink was a juce::Timer and it
+// froze Bitwig).
 //
-// Same local-socket pattern as Composer Mastermind's PatternSyncServer /
-// McpBridgeServer and the TransportCompanion - proven to work across sandboxed
-// plugin instances in Bitwig.
-class OrchCaptureLink : private juce::Timer
+// Discovery is via a lock file: the coordinator instance writes
+// <temp>/orchcapture-coordinator.lock while it holds port 47826. A client only
+// attempts a socket connection when that file exists, so the common "no
+// coordinator in the rig" state costs one File::existsAsFile() per poll and
+// nothing else.
+//
+// - `coordinator` parameter OFF -> client: when the lock file exists, keep a
+//   connection to 127.0.0.1:47826 and push this instance's lane (track name,
+//   role, and - on every completed take - the full note list) to the
+//   coordinator.
+// - `coordinator` parameter ON -> server: bind port 47826, write the lock file,
+//   collect every client's lane. "Drag ALL / Save ALL" merges the coordinator's
+//   own take plus every collected lane into one multi-track SMF. If the port is
+//   already held it reports that and keeps retrying so it can take over.
+class OrchCaptureLink : private juce::Thread
 {
 public:
     explicit OrchCaptureLink (OrchCaptureAudioProcessor&);
@@ -34,11 +41,11 @@ public:
 
     static constexpr int kPort = 47826;
 
-    // ---- message-thread queries for the editor ----
+    // ---- thread-safe queries for the editor (message thread) ----
 
     enum class Mode { Client, Coordinator, CoordinatorPortBusy };
     Mode getMode() const { return mode.load(); }
-    bool isClientConnected() const;
+    bool isClientConnected() const { return clientConnected.load(); }
 
     struct LaneRow
     {
@@ -52,14 +59,8 @@ public:
         bool haveTake = false; // a completed take has been received
     };
 
-    // Coordinator: its own lane first, then every connected client (stable
-    // first-seen order). Client / port-busy: just this instance's own lane.
     std::vector<LaneRow> getLaneRows() const;
-
-    // Coordinator only: its own take plus every client lane that has one,
-    // ready for ocap::writeMergedTakeMidi. Empty otherwise.
     std::vector<ocap::TakeForExport> collectTakesForExport() const;
-
     double getSessionTempoBpm() const;
 
 private:
@@ -67,13 +68,17 @@ private:
     class CoordinatorConnection;
     class CoordinatorServer;
 
-    void timerCallback() override;
+    void run() override;
     void reconcileMode();
+    void serviceClient();
     void pushLaneFromClient (bool includeNotes);
+    void teardownServer();
+    static juce::File lockFile();
 
     void registerServerConnection (std::unique_ptr<CoordinatorConnection>);
     void onClientMessage (CoordinatorConnection*, const juce::var&);
     void onClientGone (CoordinatorConnection*);
+    friend class ClientConnection;
     friend class CoordinatorConnection;
     friend class CoordinatorServer;
 
@@ -94,20 +99,21 @@ private:
     OrchCaptureAudioProcessor& processor;
 
     std::atomic<Mode> mode { Mode::Client };
+    std::atomic<bool> clientConnected { false };
 
+    // owned + touched only by the worker thread (run())
     std::unique_ptr<CoordinatorServer> server;
     std::unique_ptr<ClientConnection> client;
+    bool wroteLockFile = false;
+    bool clientWasConnected = false;
+    bool clientWasPlaying = false;
+    int clientLastPushedGeneration = -1;
 
     mutable std::mutex lanesMutex;
     std::vector<std::unique_ptr<CoordinatorConnection>> serverConnections;
     std::map<juce::String, Lane> lanes; // key = uid
     int laneOrderCounter = 0;
     juce::String localUid;
-
-    // client-side take-change tracking
-    bool clientWasConnected = false;
-    bool clientWasPlaying = false;
-    int clientLastPushedGeneration = -1;
 
     JUCE_DECLARE_WEAK_REFERENCEABLE (OrchCaptureLink)
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OrchCaptureLink)
