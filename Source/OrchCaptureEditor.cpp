@@ -38,7 +38,8 @@ void OrchCaptureAudioProcessorEditor::DragPad::paint (juce::Graphics& g)
 
     g.setColour (ready ? juce::Colours::white : juce::Colour::fromRGB (130, 140, 138));
     g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
-    g.drawText (ready ? "Drag MIDI out  \xe2\x86\x92" : "Drag MIDI out (no take)",
+    const juce::String arrow (juce::CharPointer_UTF8 ("\xe2\x86\x92")); // U+2192 RIGHTWARDS ARROW
+    g.drawText (ready ? "Drag MIDI out  " + arrow : "Drag MIDI out (no take)",
                 getLocalBounds(), juce::Justification::centred);
 }
 
