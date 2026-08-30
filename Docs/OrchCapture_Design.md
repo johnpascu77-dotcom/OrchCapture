@@ -1,7 +1,7 @@
 # OrchCapture — Design
 
 Date: 2026-08-30
-Status: Phase 1 (MVP) building.
+Status: Phase 1 built + live-tested; Phase 1b (two-tap) built, not yet live-tested.
 Repo: `C:\AudioDev\Repos\OrchCapture`. Plugin code `Ocap`, VST3, MIDI effect.
 GitHub: `johnpascu77-dotcom/OrchCapture` (public, like the rest of the Orch family).
 
@@ -43,8 +43,9 @@ matches what sounds.
 
 | Phase | What | Status |
 |---|---|---|
-| **1 — MVP** | Per-track plugin only. Transparent passthrough, one "most recent take" note buffer, host track name, editor status (`Track: X | Take: N notes | M bars | recording/stopped`). Per-instance export: drag-out `.mid` + "Save .mid to folder…". No coordinator. Import ~25 auto-named files into Dorico. | **building** |
-| **2 — Coordinator** | `InterprocessConnectionServer` on port **47826**, a Coordinator toggle, a multi-lane UI (one row per connected instance), one **Export All** → merged multi-track `.mid` + drag-out. | planned |
+| **1 — MVP** | Per-track plugin. Transparent passthrough, one "most recent take" note buffer, host track name, editor status, per-instance export: drag-out `.mid` + "Save .mid to folder…". | **built + live-tested 2026-08-30** |
+| **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built 2026-08-30, not yet live-tested** |
+| **2 — Coordinator** | `InterprocessConnectionServer` on port **47826**, a Coordinator toggle, a multi-lane UI keyed on `trackName + tapRole`, one **Export All** → merged multi-track `.mid` + drag-out, performance/KS track pairs matched by name. | planned |
 | **3 — Polish** | Tempo + section-marker track (from MC's blueprint, or a manual tempo map), transport/blueprint-triggered auto-arm, optional quantize-for-notation toggle, per-lane solo/exclude. | planned |
 
 ---
@@ -57,6 +58,9 @@ matches what sounds.
 |---|---|---|---|
 | `enable` | Capture Enabled | on | Off = pure passthrough, nothing recorded. |
 | `resetOnPlay` | New Take On Play | on | Start a fresh take each time the transport starts. Off = one continuous take across stop/start until **Clear Take**. |
+| `tapRole` | Tap Role | Performance | Performance / Articulation. Drives the editor subtitle and (Phase 2) the coordinator's grouping. Does *not* change capture behaviour — the two roles differ only by where the instance is placed and the KS settings. |
+| `ksZoneMin` / `ksZoneMax` | KS Zone Min / Max | 12 / 23 | Note range treated as keyswitches. A captured note in `[min, max]` gets `isKeyswitch = true`. Default 12–23 = OrchNoteMapper's unified source window. |
+| `ksExportMode` | KS Export | Inline | Inline (one track), Separate Track (musical on track 1, KS on track 2 `<name> KS`), Exclude (musical only), KS Only. |
 
 State (`getStateInformation`) persists parameters only. The take itself is **ephemeral** — like MC's
 Score View buffer, it is not saved with the project.
@@ -79,23 +83,24 @@ Score View buffer, it is not saved with the project.
 ### Track name
 
 `updateTrackProperties` (message thread, VST3 channel context) caches `properties.name`. Editor
-shows `Track: <name>`, or `Track: OrchCapture  (host sent no name)` as the fallback — a **Phase 1
-risk to verify first** that Bitwig actually delivers the name.
+shows `Track: <name>`, or `Track: OrchCapture  (host sent no name)` as the fallback. Confirmed
+working in Bitwig 2026-08-30.
 
 ### Export (`OrchCaptureTakeLogic`, pure)
 
 `writeTakeMidi(notes, options, stream)` → Format-1 SMF, 960 tpqn:
 - **Track 0** — track-name text meta + tempo meta.
-- **Track 1** — track-name text meta, then note on/offs at as-performed ppq.
+- **Track 1 (..2)** — one or two note tracks, per `options.keyswitchMode` (see §5).
 
 `normalizeTake` drops out-of-range pitches, clamps onsets to ≥ 0, forces a minimum positive note
-length, and sorts by onset then pitch. Exercised directly by `OrchCaptureTakeLogicCheck` (console
-app, `juce_audio_basics` only).
+length, sorts by onset then pitch, and preserves `isKeyswitch`. Exercised directly by
+`OrchCaptureTakeLogicCheck` (console app, `juce_audio_basics` only).
 
 ### Editor
 
 - **Capture Enabled**, **New take on transport start** toggles.
-- `Track:` and take-status lines (10 Hz).
+- **Tap Role**, **KS Zone** (min / max), **KS Export** — see §5.
+- `Track:` and take-status lines (10 Hz): `Take: N notes (K KS) | M bars | recording/stopped | last …`.
 - **Drag MIDI out** pad — drag off it to drop `<trackname>.mid` onto a Bitwig track
   (`performExternalDragDropOfFiles`; the editor is the `DragAndDropContainer`). Disabled while
   playing or with an empty take. Proven pattern — MC's Score View does the same in Bitwig.
@@ -104,17 +109,57 @@ app, `juce_audio_basics` only).
 
 ---
 
-## 4. Phase 1 risks to verify live (Bitwig)
+## 4. Phase 1 risks — verified live in Bitwig 2026-08-30
 
-1. `updateTrackProperties` actually delivers the track name in Bitwig (high confidence — name/colour
-   is standard VST3 channel context — but check first).
-2. Drag-out from the plugin editor in Bitwig (MC's Score View proves it — expected to work).
-3. Per-sample ppq interpolation lines up with the grid closely enough for a clean Dorico import
-   (as-performed timing; a quantize toggle is the Phase 3 backstop).
+1. `updateTrackProperties` **does** deliver the track name in Bitwig — confirmed (`Track: Double Bass` etc.).
+2. Drag-out from the plugin editor **works** in Bitwig.
+3. Per-sample ppq interpolation lines up cleanly enough (as-performed; quantize toggle is the Phase 3 backstop).
+
+Cosmetic: the Drag pad's arrow glyph was mojibake in the first build (raw UTF-8 in a `const char*`);
+fixed via `juce::CharPointer_UTF8`.
 
 ---
 
-## 5. Build
+## 5. Two-tap roles (Phase 1b)
+
+The unified articulation vocabulary exists at exactly one point in the chain — **between
+OrchNoteFilter and OrchNoteMapper** — where every track's keyswitches sit at the same note numbers
+(the marker is C-1 = MIDI 12, spread across 12–18 by a Bitwig *Randomize Pitch* 0–6 device, one per
+the 7 Iconica Sketch articulation slots). Downstream of OrchNoteMapper each library has its own
+*destination* KS range (Iconica: 24–35 for most instruments, 72–83 for Double Bass and
+Contrabassoon), so there is no single rule to classify keyswitches at the tail.
+
+Full analysis: [`unified_keyswitch_articulation_scoping.md`](unified_keyswitch_articulation_scoping.md).
+
+| | **Performance** role | **Articulation** role |
+|---|---|---|
+| Position | tail, after OrchNoteMapper | between OrchNoteFilter and OrchNoteMapper |
+| Records | what actually sounds — the notation source | the unified keyswitch stream |
+| `tapRole` | Performance | Articulation |
+| `ksZoneMin/Max` | that instrument's destination range (only if using a non-Inline mode) | **12–23**, same on every track |
+| `ksExportMode` | **Inline** (don't classify at the tail) | **KS Only** (or Separate Track) |
+
+Same binary — the two roles differ only by parameter values and where the instance is inserted.
+`isKeyswitch` is set at capture time by testing the note against `[ksZoneMin, ksZoneMax]`;
+`ksExportMode` then decides the SMF layout:
+
+- **Inline** — every note on track 1 (default).
+- **Separate Track** — musical notes on track 1 `<name>`, keyswitches on track 2 `<name> KS`
+  (KS track omitted if there are none, so Dorico never gets an empty staff).
+- **Exclude** — musical notes only.
+- **KS Only** — keyswitches only, track named `<name> KS`.
+
+The downstream music21 / MusicXML pass reads keyswitches by track name and maps `12 → slot 1`,
+`13 → slot 2`, … to a per-library technique name — no threshold guessing.
+
+The clip-fed **wash tracks** still take their notation from the *tail* (Performance) capture: the
+pre-Mapper stream is not range-mapped and has not been through OrchGate participation, so it contains
+notes outside the instrument's range and notes that never sounded. The Articulation tap supplies only
+the keyswitch events, aligned to the performance take by track name + onset ppq.
+
+---
+
+## 6. Build
 
 ```
 cmake -S . -B build

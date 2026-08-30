@@ -2,6 +2,7 @@
 #include "OrchCaptureEditor.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace
 {
@@ -16,6 +17,10 @@ OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
 {
     enableParam = parameters.getRawParameterValue ("enable");
     resetOnPlayParam = parameters.getRawParameterValue ("resetOnPlay");
+    tapRoleParam = parameters.getRawParameterValue ("tapRole");
+    ksZoneMinParam = parameters.getRawParameterValue ("ksZoneMin");
+    ksZoneMaxParam = parameters.getRawParameterValue ("ksZoneMax");
+    ksExportModeParam = parameters.getRawParameterValue ("ksExportMode");
 
     capturedNotes.reserve (4096);
     openNotes.reserve (256);
@@ -30,6 +35,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::c
 
     params.push_back (std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "resetOnPlay", 1 }, "New Take On Play", true));
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "tapRole", 1 }, "Tap Role",
+        juce::StringArray { "Performance", "Articulation" }, 0));
+
+    // Unified keyswitch zone. Default 12..23 = OrchNoteMapper's unified source
+    // window (marker at C-1 = MIDI 12, spread by Randomize Pitch 0..6). Only
+    // meaningful upstream of OrchNoteMapper, i.e. in the Articulation role.
+    params.push_back (std::make_unique<juce::AudioParameterInt>(
+        juce::ParameterID { "ksZoneMin", 1 }, "KS Zone Min", 0, 127, 12));
+    params.push_back (std::make_unique<juce::AudioParameterInt>(
+        juce::ParameterID { "ksZoneMax", 1 }, "KS Zone Max", 0, 127, 23));
+
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "ksExportMode", 1 }, "KS Export",
+        juce::StringArray { "Inline", "Separate Track", "Exclude", "KS Only" }, 0));
 
     return { params.begin(), params.end() };
 }
@@ -60,7 +81,17 @@ void OrchCaptureAudioProcessor::resetTake (double takeOriginPpq)
     takeStartPpq = takeOriginPpq;
     lastCapturedNoteUi.store (-1);
     takeNoteCountUi.store (0);
+    takeKeyswitchCountUi.store (0);
     takeLengthPpqUi.store (0.0);
+}
+
+bool OrchCaptureAudioProcessor::noteInKeyswitchZone (int note) const noexcept
+{
+    int lo = ksZoneMinParam != nullptr ? juce::roundToInt (ksZoneMinParam->load()) : 12;
+    int hi = ksZoneMaxParam != nullptr ? juce::roundToInt (ksZoneMaxParam->load()) : 23;
+    if (lo > hi)
+        std::swap (lo, hi);
+    return note >= lo && note <= hi;
 }
 
 void OrchCaptureAudioProcessor::finalizeOpenNotes (double ppqOff)
@@ -78,6 +109,7 @@ void OrchCaptureAudioProcessor::finalizeOpenNotes (double ppqOff)
         n.velocity = open.velocity;
         n.ppqOn = juce::jmax (0.0, open.ppqOn - takeStartPpq);
         n.ppqOff = juce::jmax (n.ppqOn, ppqOff - takeStartPpq);
+        n.isKeyswitch = noteInKeyswitchZone (open.note);
         capturedNotes.push_back (n);
     }
 
@@ -88,12 +120,18 @@ void OrchCaptureAudioProcessor::refreshTakeStatus()
 {
     // Caller holds captureLock.
     double maxOffRel = 0.0;
+    int keyswitchCount = 0;
     for (const auto& n : capturedNotes)
+    {
         maxOffRel = juce::jmax (maxOffRel, n.ppqOff);
+        if (n.isKeyswitch)
+            ++keyswitchCount;
+    }
     for (const auto& open : openNotes)
         maxOffRel = juce::jmax (maxOffRel, open.ppqOn - takeStartPpq);
 
     takeNoteCountUi.store (static_cast<int> (capturedNotes.size()));
+    takeKeyswitchCountUi.store (keyswitchCount);
     takeLengthPpqUi.store (juce::jmax (0.0, maxOffRel));
     lastCapturedNoteUi.store (capturedNotes.empty() ? -1 : capturedNotes.back().note);
 }
@@ -198,6 +236,7 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                     n.velocity = it->velocity;
                     n.ppqOn = juce::jmax (0.0, it->ppqOn - takeStartPpq);
                     n.ppqOff = juce::jmax (n.ppqOn, eventPpq - takeStartPpq);
+                    n.isKeyswitch = noteInKeyswitchZone (it->note);
                     capturedNotes.push_back (n);
                 }
 
@@ -247,12 +286,22 @@ void OrchCaptureAudioProcessor::clearTake()
     pendingClear.store (true);
 }
 
+int OrchCaptureAudioProcessor::getTapRoleForUi() const
+{
+    return tapRoleParam != nullptr && tapRoleParam->load() >= 0.5f ? 1 : 0;
+}
+
 ocap::TakeExportOptions OrchCaptureAudioProcessor::buildExportOptions() const
 {
     ocap::TakeExportOptions options;
     options.trackName = getTrackNameForUi();
     options.tempoBpm = juce::jmax (1.0, currentBpmUi.load());
     options.ticksPerQuarterNote = 960;
+
+    const int mode = ksExportModeParam != nullptr
+        ? juce::jlimit (0, 3, juce::roundToInt (ksExportModeParam->load())) : 0;
+    options.keyswitchMode = static_cast<ocap::KeyswitchExportMode> (mode);
+
     return options;
 }
 

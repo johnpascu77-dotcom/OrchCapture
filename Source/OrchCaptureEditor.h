@@ -39,11 +39,20 @@ private:
         bool dragFired = false;
     };
 
+    void layoutRoleControls();
+
     OrchCaptureAudioProcessor& audioProcessor;
 
     juce::Label titleLabel, subtitleLabel, buildLabel;
     juce::ToggleButton enableButton;
     juce::ToggleButton resetOnPlayButton;
+
+    juce::Label tapRoleLabel;
+    juce::ComboBox tapRoleBox;
+    juce::Label ksZoneLabel;
+    juce::Slider ksZoneMinSlider, ksZoneMaxSlider;
+    juce::Label ksExportLabel;
+    juce::ComboBox ksExportBox;
 
     juce::Label trackNameLabel;
     juce::Label statusLabel;
@@ -53,8 +62,14 @@ private:
     juce::TextButton clearButton { "Clear Take" };
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
+    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<ButtonAttachment> enableAttachment;
     std::unique_ptr<ButtonAttachment> resetOnPlayAttachment;
+    std::unique_ptr<ComboBoxAttachment> tapRoleAttachment;
+    std::unique_ptr<SliderAttachment> ksZoneMinAttachment;
+    std::unique_ptr<SliderAttachment> ksZoneMaxAttachment;
+    std::unique_ptr<ComboBoxAttachment> ksExportAttachment;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 

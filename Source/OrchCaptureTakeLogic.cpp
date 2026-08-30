@@ -3,9 +3,15 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace ocap
 {
+    juce::String keyswitchTrackName (const juce::String& trackName)
+    {
+        return (trackName.isNotEmpty() ? trackName : juce::String ("OrchCapture")) + " KS";
+    }
+
     std::vector<CapturedNote> normalizeTake (std::vector<CapturedNote> notes)
     {
         std::vector<CapturedNote> out;
@@ -53,12 +59,61 @@ namespace ocap
         return juce::jmax (0.0, latest - juce::jmin (earliest, 0.0));
     }
 
+    namespace
+    {
+        void appendNoteTrack (juce::MidiFile& midiFile,
+                              const juce::String& name,
+                              const std::vector<CapturedNote>& notes,
+                              int tpqn)
+        {
+            juce::MidiMessageSequence track;
+            track.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0.0);
+
+            for (const auto& n : notes)
+            {
+                const double onTick = n.ppqOn * tpqn;
+                const double offTick = juce::jmax (onTick + 1.0, n.ppqOff * tpqn);
+
+                track.addEvent (juce::MidiMessage::noteOn (n.channel, n.note,
+                                                          static_cast<juce::uint8> (n.velocity)), onTick);
+                track.addEvent (juce::MidiMessage::noteOff (n.channel, n.note), offTick);
+            }
+
+            track.updateMatchedPairs();
+            midiFile.addTrack (track);
+        }
+    }
+
     void writeTakeMidi (const std::vector<CapturedNote>& notes,
                         const TakeExportOptions& options,
                         juce::OutputStream& out)
     {
         const int tpqn = juce::jlimit (24, 3840, options.ticksPerQuarterNote);
         const auto normalized = normalizeTake (notes);
+
+        std::vector<CapturedNote> musical, keyswitch;
+        for (const auto& n : normalized)
+            (n.isKeyswitch ? keyswitch : musical).push_back (n);
+
+        // Which note tracks to emit, in order.
+        std::vector<std::pair<juce::String, const std::vector<CapturedNote>*>> noteTracks;
+        switch (options.keyswitchMode)
+        {
+            case KeyswitchExportMode::Inline:
+                noteTracks.emplace_back (options.trackName, &normalized);
+                break;
+            case KeyswitchExportMode::Exclude:
+                noteTracks.emplace_back (options.trackName, &musical);
+                break;
+            case KeyswitchExportMode::KeyswitchOnly:
+                noteTracks.emplace_back (keyswitchTrackName (options.trackName), &keyswitch);
+                break;
+            case KeyswitchExportMode::SeparateTrack:
+                noteTracks.emplace_back (options.trackName, &musical);
+                if (! keyswitch.empty())
+                    noteTracks.emplace_back (keyswitchTrackName (options.trackName), &keyswitch);
+                break;
+        }
 
         juce::MidiFile midiFile;
         midiFile.setTicksPerQuarterNote (tpqn);
@@ -73,23 +128,8 @@ namespace ocap
         meta.updateMatchedPairs();
         midiFile.addTrack (meta);
 
-        // Track 1: the instrument name again (Dorico assigns the staff from the
-        // track name) and the notes, as performed.
-        juce::MidiMessageSequence track;
-        track.addEvent (juce::MidiMessage::textMetaEvent (3, options.trackName), 0.0);
-
-        for (const auto& n : normalized)
-        {
-            const double onTick = n.ppqOn * tpqn;
-            const double offTick = juce::jmax (onTick + 1.0, n.ppqOff * tpqn);
-
-            track.addEvent (juce::MidiMessage::noteOn (n.channel, n.note,
-                                                      static_cast<juce::uint8> (n.velocity)), onTick);
-            track.addEvent (juce::MidiMessage::noteOff (n.channel, n.note), offTick);
-        }
-
-        track.updateMatchedPairs();
-        midiFile.addTrack (track);
+        for (const auto& [name, vec] : noteTracks)
+            appendNoteTrack (midiFile, name, *vec, tpqn);
 
         midiFile.writeTo (out);
     }

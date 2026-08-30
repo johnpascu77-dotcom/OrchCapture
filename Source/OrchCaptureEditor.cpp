@@ -73,8 +73,8 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setResizable (true, true);
-    setResizeLimits (460, 320, 900, 620);
-    setSize (540, 380);
+    setResizeLimits (470, 470, 900, 760);
+    setSize (560, 520);
 
     auto& params = audioProcessor.getParameters();
 
@@ -88,7 +88,7 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     styleLabel (subtitleLabel, 13.0f);
     addAndMakeVisible (subtitleLabel);
 
-    buildLabel.setText ("Build: Phase 1 (MVP)", juce::dontSendNotification);
+    buildLabel.setText ("Build: Phase 2 (two-tap)", juce::dontSendNotification);
     buildLabel.setJustificationType (juce::Justification::centred);
     buildLabel.setColour (juce::Label::textColourId, juce::Colour::fromRGB (140, 160, 170));
     buildLabel.setFont (juce::FontOptions (11.0f));
@@ -103,6 +103,44 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     resetOnPlayButton.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
     addAndMakeVisible (resetOnPlayButton);
     resetOnPlayAttachment = std::make_unique<ButtonAttachment> (params, "resetOnPlay", resetOnPlayButton);
+
+    tapRoleLabel.setText ("Tap Role", juce::dontSendNotification);
+    styleLabel (tapRoleLabel, 13.0f, true);
+    addAndMakeVisible (tapRoleLabel);
+    tapRoleBox.addItemList ({ "Performance (tail)", "Articulation (pre-Mapper)" }, 1);
+    tapRoleBox.setColour (juce::ComboBox::backgroundColourId, juce::Colour::fromRGB (28, 36, 40));
+    tapRoleBox.setColour (juce::ComboBox::textColourId, juce::Colours::white);
+    tapRoleBox.setColour (juce::ComboBox::outlineColourId, kAccent);
+    addAndMakeVisible (tapRoleBox);
+    tapRoleAttachment = std::make_unique<ComboBoxAttachment> (params, "tapRole", tapRoleBox);
+    tapRoleBox.onChange = [this] { layoutRoleControls(); };
+
+    ksZoneLabel.setText ("KS Zone (min / max)", juce::dontSendNotification);
+    styleLabel (ksZoneLabel, 13.0f, true);
+    addAndMakeVisible (ksZoneLabel);
+
+    for (auto* s : { &ksZoneMinSlider, &ksZoneMaxSlider })
+    {
+        s->setSliderStyle (juce::Slider::IncDecButtons);
+        s->setTextBoxStyle (juce::Slider::TextBoxLeft, false, 46, 22);
+        s->setColour (juce::Slider::textBoxTextColourId, juce::Colours::white);
+        s->setColour (juce::Slider::textBoxBackgroundColourId, juce::Colour::fromRGB (28, 36, 40));
+        s->setColour (juce::Slider::textBoxOutlineColourId, juce::Colour::fromRGB (70, 85, 90));
+        addAndMakeVisible (*s);
+    }
+    ksZoneMinAttachment = std::make_unique<SliderAttachment> (params, "ksZoneMin", ksZoneMinSlider);
+    ksZoneMaxAttachment = std::make_unique<SliderAttachment> (params, "ksZoneMax", ksZoneMaxSlider);
+
+    ksExportLabel.setText ("KS Export", juce::dontSendNotification);
+    styleLabel (ksExportLabel, 13.0f, true);
+    addAndMakeVisible (ksExportLabel);
+    ksExportBox.addItemList ({ "Inline", "Separate Track", "Exclude", "KS Only" }, 1);
+    ksExportBox.setColour (juce::ComboBox::backgroundColourId, juce::Colour::fromRGB (28, 36, 40));
+    ksExportBox.setColour (juce::ComboBox::textColourId, juce::Colours::white);
+    ksExportBox.setColour (juce::ComboBox::outlineColourId, kAccent);
+    addAndMakeVisible (ksExportBox);
+    ksExportAttachment = std::make_unique<ComboBoxAttachment> (params, "ksExportMode", ksExportBox);
+    ksExportBox.onChange = [this] { layoutRoleControls(); };
 
     trackNameLabel.setJustificationType (juce::Justification::centredLeft);
     styleLabel (trackNameLabel, 14.0f, true);
@@ -126,6 +164,7 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     clearButton.onClick = [this] { audioProcessor.clearTake(); };
     addAndMakeVisible (clearButton);
 
+    layoutRoleControls();
     updateStatus();
     startTimerHz (10);
 }
@@ -157,18 +196,53 @@ void OrchCaptureAudioProcessorEditor::resized()
     statusLabel.setBounds (area.removeFromTop (24));
     area.removeFromTop (14);
 
-    enableButton.setBounds (area.removeFromTop (26));
-    area.removeFromTop (4);
-    resetOnPlayButton.setBounds (area.removeFromTop (26));
-    area.removeFromTop (16);
+    enableButton.setBounds (area.removeFromTop (24));
+    area.removeFromTop (2);
+    resetOnPlayButton.setBounds (area.removeFromTop (24));
+    area.removeFromTop (12);
 
-    dragPad.setBounds (area.removeFromTop (52));
+    {
+        auto rowR = area.removeFromTop (26);
+        tapRoleLabel.setBounds (rowR.removeFromLeft (130));
+        tapRoleBox.setBounds (rowR);
+    }
+    area.removeFromTop (6);
+    {
+        auto rowZ = area.removeFromTop (26);
+        ksZoneLabel.setBounds (rowZ.removeFromLeft (130));
+        ksZoneMinSlider.setBounds (rowZ.removeFromLeft (100));
+        rowZ.removeFromLeft (10);
+        ksZoneMaxSlider.setBounds (rowZ.removeFromLeft (100));
+    }
+    area.removeFromTop (6);
+    {
+        auto rowE = area.removeFromTop (26);
+        ksExportLabel.setBounds (rowE.removeFromLeft (130));
+        ksExportBox.setBounds (rowE.removeFromLeft (180));
+    }
+    area.removeFromTop (14);
+
+    dragPad.setBounds (area.removeFromTop (50));
     area.removeFromTop (10);
 
     auto row = area.removeFromTop (30);
     saveButton.setBounds (row.removeFromLeft (row.getWidth() * 2 / 3).reduced (0, 2));
     row.removeFromLeft (8);
     clearButton.setBounds (row.reduced (0, 2));
+}
+
+void OrchCaptureAudioProcessorEditor::layoutRoleControls()
+{
+    const bool articulation = audioProcessor.getTapRoleForUi() == 1;
+
+    subtitleLabel.setText (articulation ? "Unified keyswitch stream (pre-Mapper tap)"
+                                        : "Post-chain MIDI take recorder (notation source)",
+                           juce::dontSendNotification);
+
+    const bool ksZoneInPlay = articulation || ksExportBox.getSelectedItemIndex() > 0;
+    ksZoneLabel.setEnabled (ksZoneInPlay);
+    ksZoneMinSlider.setEnabled (ksZoneInPlay);
+    ksZoneMaxSlider.setEnabled (ksZoneInPlay);
 }
 
 void OrchCaptureAudioProcessorEditor::timerCallback()
@@ -185,12 +259,14 @@ void OrchCaptureAudioProcessorEditor::updateStatus()
                             juce::dontSendNotification);
 
     const int count = audioProcessor.getTakeNoteCountForUi();
+    const int ksCount = audioProcessor.getTakeKeyswitchCountForUi();
     const double lengthPpq = audioProcessor.getTakeLengthQuarterNotesForUi();
     const double bars = lengthPpq / 4.0; // 4/4 assumed for the readout
     const bool playing = audioProcessor.isTransportPlayingForUi();
 
     juce::String text;
     text << "Take: " << count << (count == 1 ? " note" : " notes")
+         << " (" << ksCount << " KS)"
          << "  |  " << juce::String (bars, 1) << " bars"
          << "  |  " << (playing ? "recording" : "stopped");
 

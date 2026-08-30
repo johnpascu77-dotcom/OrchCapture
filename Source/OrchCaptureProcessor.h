@@ -6,13 +6,23 @@
 
 #include "OrchCaptureTakeLogic.h"
 
-// OrchCapture - Phase 1 MVP.
+// OrchCapture - Phase 1 + Phase 2 (two-tap).
 //
-// A transparent MIDI-effect plugin that sits LAST on an instrument track (after
-// OrchNoteMapper, before the instrument) and records the exact post-full-chain
-// note stream that track plays, plus the track's own name. One "most recent
-// take" per instance, exported as a Dorico-ready Standard MIDI File - per
-// instance in Phase 1, merged by a coordinator in Phase 2.
+// A transparent MIDI-effect plugin that records the exact note stream a track
+// plays plus the track's own name, one "most recent take" per instance,
+// exported as a Dorico-ready Standard MIDI File.
+//
+// Two roles, one binary, differing only by parameter values:
+//   - Performance : placed LAST (after OrchNoteMapper) - what actually sounds,
+//     the notation source. Keyswitches are each library's per-instrument
+//     destination notes, so this role keeps them Inline (no reliable rule to
+//     classify them at the tail).
+//   - Articulation: placed between OrchNoteFilter and OrchNoteMapper - the
+//     UNIFIED keyswitch stream, same note zone (default 12..23) on every track.
+//     One KS-zone setting splits keyswitches from notes rig-wide.
+//
+// The KS zone [ksZoneMin, ksZoneMax] tags each captured note isKeyswitch at
+// capture time; ksExportMode then decides the SMF track layout.
 class OrchCaptureAudioProcessor final : public juce::AudioProcessor
 {
 public:
@@ -58,10 +68,14 @@ public:
     std::vector<ocap::CapturedNote> snapshotTake() const;
 
     int getTakeNoteCountForUi() const { return takeNoteCountUi.load(); }
+    int getTakeKeyswitchCountForUi() const { return takeKeyswitchCountUi.load(); }
     double getTakeLengthQuarterNotesForUi() const { return takeLengthPpqUi.load(); }
     bool isTransportPlayingForUi() const { return transportPlayingUi.load(); }
     bool hasHostTrackNameForUi() const { return haveHostTrackName.load(); }
     int getLastCapturedNoteForUi() const { return lastCapturedNoteUi.load(); }
+
+    // 0 = Performance, 1 = Articulation.
+    int getTapRoleForUi() const;
 
     double getCurrentTempoBpm() const { return currentBpmUi.load(); }
 
@@ -82,10 +96,15 @@ private:
 
     void resetTake (double takeOriginPpq);
     void finalizeOpenNotes (double ppqOff);
+    bool noteInKeyswitchZone (int note) const noexcept;
 
     juce::AudioProcessorValueTreeState parameters;
     std::atomic<float>* enableParam = nullptr;
     std::atomic<float>* resetOnPlayParam = nullptr;
+    std::atomic<float>* tapRoleParam = nullptr;
+    std::atomic<float>* ksZoneMinParam = nullptr;
+    std::atomic<float>* ksZoneMaxParam = nullptr;
+    std::atomic<float>* ksExportModeParam = nullptr;
 
     double sampleRate = 44100.0;
 
@@ -113,6 +132,7 @@ private:
 
     // UI status mirrors.
     std::atomic<int> takeNoteCountUi { 0 };
+    std::atomic<int> takeKeyswitchCountUi { 0 };
     std::atomic<double> takeLengthPpqUi { 0.0 };
     std::atomic<bool> transportPlayingUi { false };
     std::atomic<int> lastCapturedNoteUi { -1 };

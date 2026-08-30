@@ -31,6 +31,13 @@ namespace
         return n;
     }
 
+    ocap::CapturedNote makeKs (double on, double off, int note, int ch = 1)
+    {
+        auto n = makeNote (on, off, note, 100, ch);
+        n.isKeyswitch = true;
+        return n;
+    }
+
     // Count note-ons in track `trackIndex` of an SMF held in `data`, and report
     // the tick of the first note-on and the track's first text-meta string.
     struct TrackScan
@@ -162,6 +169,77 @@ int main()
         check (notes.numTracks == 2, "empty take writes a 2-track file");
         check (notes.noteOns == 0, "empty take writes no note-ons");
     }
+
+    // normalizeTake preserves the isKeyswitch flag.
+    {
+        std::vector<ocap::CapturedNote> take { makeKs (0.0, 0.5, 12), makeNote (0.0, 1.0, 60) };
+        const auto n = ocap::normalizeTake (take);
+        check (n.size() == 2 && n[0].note == 12 && n[0].isKeyswitch && ! n[1].isKeyswitch,
+               "normalizeTake carries isKeyswitch through");
+    }
+
+    // KS export modes. Take = 2 musical notes + 3 keyswitches.
+    {
+        const auto take = [] {
+            std::vector<ocap::CapturedNote> t {
+                makeNote (0.0, 1.0, 60), makeNote (1.0, 2.0, 64),
+                makeKs (0.0, 0.1, 12), makeKs (1.0, 1.1, 13), makeKs (2.0, 2.1, 12),
+            };
+            return t;
+        }();
+
+        ocap::TakeExportOptions opts;
+        opts.trackName = "Cello";
+
+        auto writeWith = [&] (ocap::KeyswitchExportMode mode) {
+            opts.keyswitchMode = mode;
+            juce::MemoryOutputStream mos;
+            ocap::writeTakeMidi (take, opts, mos);
+            return juce::MemoryBlock (mos.getData(), mos.getDataSize());
+        };
+
+        {
+            const auto d = writeWith (ocap::KeyswitchExportMode::Inline);
+            const auto t1 = scan (d, 1);
+            check (t1.numTracks == 2 && t1.noteOns == 5, "Inline: all 5 notes on one track");
+        }
+        {
+            const auto d = writeWith (ocap::KeyswitchExportMode::Exclude);
+            const auto t1 = scan (d, 1);
+            check (t1.numTracks == 2 && t1.noteOns == 2, "Exclude: only the 2 musical notes");
+        }
+        {
+            const auto d = writeWith (ocap::KeyswitchExportMode::KeyswitchOnly);
+            const auto t1 = scan (d, 1);
+            check (t1.numTracks == 2 && t1.noteOns == 3, "KS Only: only the 3 keyswitches");
+            check (t1.firstText == "Cello KS", "KS Only: track named '<name> KS'");
+        }
+        {
+            const auto d = writeWith (ocap::KeyswitchExportMode::SeparateTrack);
+            const auto t1 = scan (d, 1);
+            const auto t2 = scan (d, 2);
+            check (t1.numTracks == 3, "Separate Track: meta + musical + KS = 3 tracks");
+            check (t1.noteOns == 2 && t1.firstText == "Cello", "Separate Track: musical track keeps the name");
+            check (t2.noteOns == 3 && t2.firstText == "Cello KS", "Separate Track: KS track named '<name> KS'");
+        }
+    }
+
+    // SeparateTrack with no keyswitches collapses to the plain 2-track file.
+    {
+        std::vector<ocap::CapturedNote> take { makeNote (0.0, 1.0, 60) };
+        ocap::TakeExportOptions opts;
+        opts.trackName = "Flute";
+        opts.keyswitchMode = ocap::KeyswitchExportMode::SeparateTrack;
+
+        juce::MemoryOutputStream mos;
+        ocap::writeTakeMidi (take, opts, mos);
+        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+        const auto t1 = scan (data, 1);
+        check (t1.numTracks == 2 && t1.noteOns == 1, "Separate Track with no KS -> 2-track file, no empty KS staff");
+    }
+
+    check (ocap::keyswitchTrackName ("Viola") == "Viola KS", "keyswitchTrackName appends ' KS'");
+    check (ocap::keyswitchTrackName ("") == "OrchCapture KS", "keyswitchTrackName falls back on an empty name");
 
     std::cout << "-------------------------\n";
     if (failures == 0)
