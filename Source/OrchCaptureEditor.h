@@ -1,11 +1,14 @@
 #pragma once
 
+#include <vector>
 #include <JuceHeader.h>
 #include "OrchCaptureProcessor.h"
+#include "OrchCaptureLink.h"
 
 class OrchCaptureAudioProcessorEditor : public juce::AudioProcessorEditor,
                                         public juce::DragAndDropContainer,
-                                        private juce::Timer
+                                        private juce::Timer,
+                                        private juce::ListBoxModel
 {
 public:
     explicit OrchCaptureAudioProcessorEditor (OrchCaptureAudioProcessor&);
@@ -17,11 +20,20 @@ public:
 private:
     void timerCallback() override;
     void updateStatus();
+    void layoutRoleControls();
 
-    // Writes the current take to a temp .mid and returns it, or an invalid
-    // File{} if there is nothing to export / the transport is still playing.
+    // ListBoxModel - the coordinator's lane list.
+    int getNumRows() override;
+    void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;
+
+    bool coordinatorActive() const;
+
+    // Writes the current take (or, on the coordinator, the merged rig take) to a
+    // temp .mid and returns it, or an invalid File{} if there is nothing to
+    // export / the transport is still playing.
     juce::File writeTakeToTempFile();
-    void saveTakeToFolder();
+    juce::File writeMergedToTempFile();
+    void saveToFolder();
 
     // Small drag source: drag off it to drop the take's .mid onto a track.
     class DragPad : public juce::Component
@@ -29,6 +41,7 @@ private:
     public:
         std::function<juce::File()> onRequestFile;
         std::function<bool()> canDrag;
+        std::function<juce::String()> labelText;
 
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
@@ -38,8 +51,6 @@ private:
         juce::Point<float> dragStart;
         bool dragFired = false;
     };
-
-    void layoutRoleControls();
 
     OrchCaptureAudioProcessor& audioProcessor;
 
@@ -54,12 +65,18 @@ private:
     juce::Label ksExportLabel;
     juce::ComboBox ksExportBox;
 
+    juce::ToggleButton coordinatorButton;
+    juce::Label coordinatorStatusLabel;
+    juce::ListBox laneList { "lanes", this };
+
     juce::Label trackNameLabel;
     juce::Label statusLabel;
 
     DragPad dragPad;
     juce::TextButton saveButton { "Save .mid to folder..." };
     juce::TextButton clearButton { "Clear Take" };
+
+    std::vector<OrchCaptureLink::LaneRow> laneRows;
 
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
@@ -70,6 +87,7 @@ private:
     std::unique_ptr<SliderAttachment> ksZoneMinAttachment;
     std::unique_ptr<SliderAttachment> ksZoneMaxAttachment;
     std::unique_ptr<ComboBoxAttachment> ksExportAttachment;
+    std::unique_ptr<ButtonAttachment> coordinatorAttachment;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 

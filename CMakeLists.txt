@@ -37,6 +37,7 @@ target_sources(OrchCapture
         Source/OrchCaptureProcessor.cpp
         Source/OrchCaptureEditor.cpp
         Source/OrchCaptureTakeLogic.cpp
+        Source/OrchCaptureLink.cpp
 )
 
 target_compile_definitions(OrchCapture

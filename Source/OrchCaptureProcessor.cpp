@@ -1,5 +1,6 @@
 #include "OrchCaptureProcessor.h"
 #include "OrchCaptureEditor.h"
+#include "OrchCaptureLink.h"
 
 #include <algorithm>
 #include <utility>
@@ -21,9 +22,17 @@ OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
     ksZoneMinParam = parameters.getRawParameterValue ("ksZoneMin");
     ksZoneMaxParam = parameters.getRawParameterValue ("ksZoneMax");
     ksExportModeParam = parameters.getRawParameterValue ("ksExportMode");
+    coordinatorParam = parameters.getRawParameterValue ("coordinator");
 
     capturedNotes.reserve (4096);
     openNotes.reserve (256);
+
+    link = std::make_unique<OrchCaptureLink> (*this);
+}
+
+OrchCaptureAudioProcessor::~OrchCaptureAudioProcessor()
+{
+    link.reset();
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::createParameterLayout()
@@ -51,6 +60,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::c
     params.push_back (std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID { "ksExportMode", 1 }, "KS Export",
         juce::StringArray { "Inline", "Separate Track", "Exclude", "KS Only" }, 0));
+
+    // One instance in the rig turns this on to become the export hub: it binds
+    // the local coordinator socket, collects every other instance's take, and
+    // its editor gains "Export All".
+    params.push_back (std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID { "coordinator", 1 }, "Coordinator", false));
 
     return { params.begin(), params.end() };
 }
@@ -83,6 +98,7 @@ void OrchCaptureAudioProcessor::resetTake (double takeOriginPpq)
     takeNoteCountUi.store (0);
     takeKeyswitchCountUi.store (0);
     takeLengthPpqUi.store (0.0);
+    takeGenerationUi.fetch_add (1);
 }
 
 bool OrchCaptureAudioProcessor::noteInKeyswitchZone (int note) const noexcept
@@ -289,6 +305,11 @@ void OrchCaptureAudioProcessor::clearTake()
 int OrchCaptureAudioProcessor::getTapRoleForUi() const
 {
     return tapRoleParam != nullptr && tapRoleParam->load() >= 0.5f ? 1 : 0;
+}
+
+bool OrchCaptureAudioProcessor::isCoordinatorParamOn() const
+{
+    return coordinatorParam != nullptr && coordinatorParam->load() >= 0.5f;
 }
 
 ocap::TakeExportOptions OrchCaptureAudioProcessor::buildExportOptions() const

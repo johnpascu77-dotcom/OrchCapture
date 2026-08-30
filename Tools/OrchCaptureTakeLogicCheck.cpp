@@ -241,6 +241,77 @@ int main()
     check (ocap::keyswitchTrackName ("Viola") == "Viola KS", "keyswitchTrackName appends ' KS'");
     check (ocap::keyswitchTrackName ("") == "OrchCapture KS", "keyswitchTrackName falls back on an empty name");
 
+    // takeToVar / takeFromVar round-trip.
+    {
+        std::vector<ocap::CapturedNote> take {
+            makeNote (0.25, 1.75, 60, 111, 3), makeKs (2.0, 2.1, 14, 2),
+        };
+        const auto back = ocap::takeFromVar (ocap::takeToVar (take));
+        check (back.size() == 2, "take var round-trip keeps the note count");
+        check (std::abs (back[0].ppqOn - 0.25) < 1e-9 && std::abs (back[0].ppqOff - 1.75) < 1e-9
+                   && back[0].note == 60 && back[0].velocity == 111 && back[0].channel == 3
+                   && ! back[0].isKeyswitch,
+               "take var round-trip preserves all fields of a musical note");
+        check (back[1].note == 14 && back[1].isKeyswitch, "take var round-trip preserves the KS flag");
+    }
+
+    // planNoteTracks matches the modes.
+    {
+        std::vector<ocap::CapturedNote> take { makeNote (0, 1, 60), makeKs (0, 0.1, 12) };
+        ocap::TakeExportOptions o;
+        o.trackName = "Horn";
+
+        o.keyswitchMode = ocap::KeyswitchExportMode::Inline;
+        check (ocap::planNoteTracks (take, o).size() == 1, "planNoteTracks Inline -> 1 track");
+
+        o.keyswitchMode = ocap::KeyswitchExportMode::SeparateTrack;
+        const auto sep = ocap::planNoteTracks (take, o);
+        check (sep.size() == 2 && sep[0].name == "Horn" && sep[1].name == "Horn KS",
+               "planNoteTracks Separate Track -> 'Horn' + 'Horn KS'");
+    }
+
+    // writeMergedTakeMidi: grouping by first-seen track name, Perf before Artic.
+    {
+        auto perf = [] (const char* name) {
+            ocap::TakeForExport t;
+            t.options.trackName = name;
+            t.options.tapRole = 0;
+            t.options.keyswitchMode = ocap::KeyswitchExportMode::Inline;
+            t.notes = { makeNote (0, 1, 60), makeNote (1, 2, 62) };
+            return t;
+        };
+        auto artic = [] (const char* name) {
+            ocap::TakeForExport t;
+            t.options.trackName = name;
+            t.options.tapRole = 1;
+            t.options.keyswitchMode = ocap::KeyswitchExportMode::KeyswitchOnly;
+            t.notes = { makeKs (0, 0.1, 12), makeKs (1, 1.1, 13) };
+            return t;
+        };
+
+        // Deliberately out of order: Cello artic first, then Viola perf/artic, then Cello perf.
+        std::vector<ocap::TakeForExport> takes { artic ("Cello"), perf ("Viola"), artic ("Viola"), perf ("Cello") };
+
+        juce::MemoryOutputStream mos;
+        ocap::writeMergedTakeMidi (takes, "Session", 96.0, 960, mos);
+        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+
+        juce::MemoryInputStream in (data, false);
+        juce::MidiFile mf;
+        check (mf.readFrom (in), "merged file parses");
+        check (mf.getNumTracks() == 5, "merged file = tempo + Cello + Cello KS + Viola + Viola KS");
+
+        auto trackName = [&] (int i) {
+            const auto* seq = mf.getTrack (i);
+            for (int e = 0; e < seq->getNumEvents(); ++e)
+                if (seq->getEventPointer (e)->message.isTextMetaEvent())
+                    return seq->getEventPointer (e)->message.getTextFromTextMetaEvent();
+            return juce::String();
+        };
+        check (trackName (1) == "Cello" && trackName (2) == "Cello KS", "merged: Cello group first (first-seen), Perf before Artic");
+        check (trackName (3) == "Viola" && trackName (4) == "Viola KS", "merged: Viola group second");
+    }
+
     std::cout << "-------------------------\n";
     if (failures == 0)
     {

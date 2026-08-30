@@ -39,8 +39,10 @@ void OrchCaptureAudioProcessorEditor::DragPad::paint (juce::Graphics& g)
     g.setColour (ready ? juce::Colours::white : juce::Colour::fromRGB (130, 140, 138));
     g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
     const juce::String arrow (juce::CharPointer_UTF8 ("\xe2\x86\x92")); // U+2192 RIGHTWARDS ARROW
-    g.drawText (ready ? "Drag MIDI out  " + arrow : "Drag MIDI out (no take)",
-                getLocalBounds(), juce::Justification::centred);
+    const juce::String text = labelText ? labelText()
+                                        : juce::String (ready ? "Drag MIDI out  " + arrow
+                                                              : "Drag MIDI out (no take)");
+    g.drawText (text, getLocalBounds(), juce::Justification::centred);
 }
 
 void OrchCaptureAudioProcessorEditor::DragPad::mouseDown (const juce::MouseEvent& e)
@@ -73,8 +75,8 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setResizable (true, true);
-    setResizeLimits (470, 470, 900, 760);
-    setSize (560, 520);
+    setResizeLimits (470, 540, 900, 900);
+    setSize (560, 620);
 
     auto& params = audioProcessor.getParameters();
 
@@ -88,7 +90,7 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     styleLabel (subtitleLabel, 13.0f);
     addAndMakeVisible (subtitleLabel);
 
-    buildLabel.setText ("Build: Phase 2 (two-tap)", juce::dontSendNotification);
+    buildLabel.setText ("Build: Phase 2 (coordinator)", juce::dontSendNotification);
     buildLabel.setJustificationType (juce::Justification::centred);
     buildLabel.setColour (juce::Label::textColourId, juce::Colour::fromRGB (140, 160, 170));
     buildLabel.setFont (juce::FontOptions (11.0f));
@@ -142,6 +144,22 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     ksExportAttachment = std::make_unique<ComboBoxAttachment> (params, "ksExportMode", ksExportBox);
     ksExportBox.onChange = [this] { layoutRoleControls(); };
 
+    coordinatorButton.setButtonText ("Coordinator (rig export hub, port 47826)");
+    coordinatorButton.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
+    addAndMakeVisible (coordinatorButton);
+    coordinatorAttachment = std::make_unique<ButtonAttachment> (params, "coordinator", coordinatorButton);
+
+    coordinatorStatusLabel.setJustificationType (juce::Justification::centredLeft);
+    coordinatorStatusLabel.setColour (juce::Label::textColourId, juce::Colour::fromRGB (150, 200, 175));
+    coordinatorStatusLabel.setFont (juce::FontOptions (12.0f));
+    addAndMakeVisible (coordinatorStatusLabel);
+
+    laneList.setColour (juce::ListBox::backgroundColourId, juce::Colour::fromRGB (22, 28, 32));
+    laneList.setColour (juce::ListBox::outlineColourId, juce::Colour::fromRGB (60, 74, 70));
+    laneList.setOutlineThickness (1);
+    laneList.setRowHeight (20);
+    addAndMakeVisible (laneList);
+
     trackNameLabel.setJustificationType (juce::Justification::centredLeft);
     styleLabel (trackNameLabel, 14.0f, true);
     addAndMakeVisible (trackNameLabel);
@@ -151,14 +169,34 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     statusLabel.setFont (juce::FontOptions (13.0f));
     addAndMakeVisible (statusLabel);
 
-    dragPad.onRequestFile = [this] { return writeTakeToTempFile(); };
+    dragPad.onRequestFile = [this]
+    {
+        return coordinatorActive() ? writeMergedToTempFile() : writeTakeToTempFile();
+    };
     dragPad.canDrag = [this]
     {
-        return ! audioProcessor.isTransportPlayingForUi() && audioProcessor.getTakeNoteCountForUi() > 0;
+        if (audioProcessor.isTransportPlayingForUi())
+            return false;
+        if (coordinatorActive())
+        {
+            for (const auto& row : laneRows)
+                if (row.haveTake)
+                    return true;
+            return false;
+        }
+        return audioProcessor.getTakeNoteCountForUi() > 0;
+    };
+    dragPad.labelText = [this] () -> juce::String
+    {
+        const juce::String arrow (juce::CharPointer_UTF8 ("\xe2\x86\x92"));
+        const bool ready = dragPad.canDrag && dragPad.canDrag();
+        if (coordinatorActive())
+            return ready ? "Drag ALL MIDI out  " + arrow : "Drag ALL MIDI out (no takes yet)";
+        return ready ? "Drag MIDI out  " + arrow : "Drag MIDI out (no take)";
     };
     addAndMakeVisible (dragPad);
 
-    saveButton.onClick = [this] { saveTakeToFolder(); };
+    saveButton.onClick = [this] { saveToFolder(); };
     addAndMakeVisible (saveButton);
 
     clearButton.onClick = [this] { audioProcessor.clearTake(); };
@@ -220,15 +258,23 @@ void OrchCaptureAudioProcessorEditor::resized()
         ksExportLabel.setBounds (rowE.removeFromLeft (130));
         ksExportBox.setBounds (rowE.removeFromLeft (180));
     }
-    area.removeFromTop (14);
+    area.removeFromTop (12);
 
-    dragPad.setBounds (area.removeFromTop (50));
-    area.removeFromTop (10);
+    coordinatorButton.setBounds (area.removeFromTop (24));
+    area.removeFromTop (2);
+    coordinatorStatusLabel.setBounds (area.removeFromTop (18));
+    area.removeFromTop (6);
 
-    auto row = area.removeFromTop (30);
+    // Bottom-anchored: drag pad + button row, then the lane list fills the gap.
+    auto row = area.removeFromBottom (30);
     saveButton.setBounds (row.removeFromLeft (row.getWidth() * 2 / 3).reduced (0, 2));
     row.removeFromLeft (8);
     clearButton.setBounds (row.reduced (0, 2));
+    area.removeFromBottom (10);
+    dragPad.setBounds (area.removeFromBottom (50));
+    area.removeFromBottom (10);
+
+    laneList.setBounds (area);
 }
 
 void OrchCaptureAudioProcessorEditor::layoutRoleControls()
@@ -245,10 +291,87 @@ void OrchCaptureAudioProcessorEditor::layoutRoleControls()
     ksZoneMaxSlider.setEnabled (ksZoneInPlay);
 }
 
+bool OrchCaptureAudioProcessorEditor::coordinatorActive() const
+{
+    return audioProcessor.getLink().getMode() == OrchCaptureLink::Mode::Coordinator;
+}
+
 void OrchCaptureAudioProcessorEditor::timerCallback()
 {
     updateStatus();
+
+    auto& link = audioProcessor.getLink();
+    const auto linkMode = link.getMode();
+
+    laneRows = link.getLaneRows();
+    laneList.updateContent();
+    laneList.repaint();
+
+    juce::String coordText;
+    switch (linkMode)
+    {
+        case OrchCaptureLink::Mode::Coordinator:
+        {
+            int withTakes = 0;
+            for (const auto& r : laneRows)
+                if (r.haveTake)
+                    ++withTakes;
+            coordText << "Coordinator active  |  " << (int) laneRows.size() << " lanes  |  "
+                      << withTakes << " with a take";
+            break;
+        }
+        case OrchCaptureLink::Mode::CoordinatorPortBusy:
+            coordText = "Coordinator: port 47826 already held by another instance - running as a client";
+            break;
+        case OrchCaptureLink::Mode::Client:
+            coordText = link.isClientConnected() ? "Client: connected to the coordinator"
+                                                 : "Client: no coordinator on the rig yet";
+            break;
+    }
+    coordinatorStatusLabel.setText (coordText, juce::dontSendNotification);
+
+    const bool showList = linkMode == OrchCaptureLink::Mode::Coordinator;
+    laneList.setVisible (showList);
+
     dragPad.repaint();
+}
+
+int OrchCaptureAudioProcessorEditor::getNumRows()
+{
+    return static_cast<int> (laneRows.size());
+}
+
+void OrchCaptureAudioProcessorEditor::paintListBoxItem (int row, juce::Graphics& g,
+                                                        int width, int height, bool)
+{
+    if (row < 0 || row >= static_cast<int> (laneRows.size()))
+        return;
+
+    const auto& r = laneRows[static_cast<size_t> (row)];
+
+    g.setColour (row % 2 == 0 ? juce::Colour::fromRGB (24, 30, 34)
+                              : juce::Colour::fromRGB (20, 26, 30));
+    g.fillRect (0, 0, width, height);
+
+    if (r.playing)
+    {
+        g.setColour (juce::Colour::fromRGB (245, 205, 120));
+        g.fillEllipse (6.0f, height * 0.5f - 3.0f, 6.0f, 6.0f);
+    }
+
+    g.setColour (r.haveTake ? juce::Colours::white : juce::Colour::fromRGB (120, 130, 128));
+    g.setFont (juce::FontOptions (12.0f));
+
+    juce::String line;
+    line << (r.trackName.isNotEmpty() ? r.trackName : juce::String ("(unnamed)"))
+         << "  \xc2\xb7  " << (r.role == 1 ? "Artic" : "Perf")
+         << (r.isLocal ? "  (this)" : "")
+         << "   " << r.noteCount << "n";
+    if (r.keyswitchCount > 0)
+        line << " / " << r.keyswitchCount << "ks";
+    line << "   " << juce::String (r.lengthPpq / 4.0, 1) << "b";
+
+    g.drawText (line, 18, 0, width - 22, height, juce::Justification::centredLeft);
 }
 
 void OrchCaptureAudioProcessorEditor::updateStatus()
@@ -298,32 +421,61 @@ juce::File OrchCaptureAudioProcessorEditor::writeTakeToTempFile()
     return file;
 }
 
-void OrchCaptureAudioProcessorEditor::saveTakeToFolder()
+juce::File OrchCaptureAudioProcessorEditor::writeMergedToTempFile()
 {
-    if (audioProcessor.isTransportPlayingForUi() || audioProcessor.getTakeNoteCountForUi() == 0)
+    if (audioProcessor.isTransportPlayingForUi())
+        return {};
+
+    const auto takes = audioProcessor.getLink().collectTakesForExport();
+    if (takes.empty())
+        return {};
+
+    const auto file = tempMidiPath ("session");
+
+    juce::FileOutputStream stream (file);
+    if (! stream.openedOk())
+        return {};
+
+    ocap::writeMergedTakeMidi (takes, "OrchCapture session",
+                               audioProcessor.getLink().getSessionTempoBpm(), 960, stream);
+    stream.flush();
+    return file;
+}
+
+void OrchCaptureAudioProcessorEditor::saveToFolder()
+{
+    const bool merged = coordinatorActive();
+
+    if (audioProcessor.isTransportPlayingForUi())
     {
-        statusLabel.setText ("Nothing to save (stop the transport and record a take first)",
+        statusLabel.setText ("Stop the transport first", juce::dontSendNotification);
+        return;
+    }
+
+    const bool haveSomething = merged ? ! audioProcessor.getLink().collectTakesForExport().empty()
+                                      : audioProcessor.getTakeNoteCountForUi() > 0;
+    if (! haveSomething)
+    {
+        statusLabel.setText (merged ? "No lane has a take yet" : "Record a take first",
                              juce::dontSendNotification);
         return;
     }
 
-    const auto options = audioProcessor.buildExportOptions();
+    const auto stem = merged ? juce::String ("OrchCapture session")
+                             : audioProcessor.buildExportOptions().trackName;
     const auto suggested = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
-                               .getChildFile (juce::File::createLegalFileName (options.trackName) + ".mid");
+                               .getChildFile (juce::File::createLegalFileName (stem) + ".mid");
 
-    fileChooser = std::make_unique<juce::FileChooser> ("Save take as MIDI", suggested, "*.mid");
+    fileChooser = std::make_unique<juce::FileChooser> (merged ? "Save merged rig MIDI" : "Save take as MIDI",
+                                                       suggested, "*.mid");
     const auto chooserFlags = juce::FileBrowserComponent::saveMode
                             | juce::FileBrowserComponent::canSelectFiles
                             | juce::FileBrowserComponent::warnAboutOverwriting;
 
-    fileChooser->launchAsync (chooserFlags, [this] (const juce::FileChooser& fc)
+    fileChooser->launchAsync (chooserFlags, [this, merged] (const juce::FileChooser& fc)
     {
         const auto target = fc.getResult();
         if (target == juce::File())
-            return;
-
-        const auto take = audioProcessor.snapshotTake();
-        if (take.empty())
             return;
 
         auto file = target.hasFileExtension ("mid") ? target : target.withFileExtension ("mid");
@@ -337,7 +489,23 @@ void OrchCaptureAudioProcessorEditor::saveTakeToFolder()
 
         stream.setPosition (0);
         stream.truncate();
-        ocap::writeTakeMidi (take, audioProcessor.buildExportOptions(), stream);
+
+        if (merged)
+        {
+            const auto takes = audioProcessor.getLink().collectTakesForExport();
+            if (takes.empty())
+                return;
+            ocap::writeMergedTakeMidi (takes, "OrchCapture session",
+                                       audioProcessor.getLink().getSessionTempoBpm(), 960, stream);
+        }
+        else
+        {
+            const auto take = audioProcessor.snapshotTake();
+            if (take.empty())
+                return;
+            ocap::writeTakeMidi (take, audioProcessor.buildExportOptions(), stream);
+        }
+
         stream.flush();
         statusLabel.setText ("Saved " + file.getFileName(), juce::dontSendNotification);
     });

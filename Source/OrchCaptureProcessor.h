@@ -1,10 +1,13 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <vector>
 #include <JuceHeader.h>
 
 #include "OrchCaptureTakeLogic.h"
+
+class OrchCaptureLink;
 
 // OrchCapture - Phase 1 + Phase 2 (two-tap).
 //
@@ -27,7 +30,7 @@ class OrchCaptureAudioProcessor final : public juce::AudioProcessor
 {
 public:
     OrchCaptureAudioProcessor();
-    ~OrchCaptureAudioProcessor() override = default;
+    ~OrchCaptureAudioProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -77,6 +80,14 @@ public:
     // 0 = Performance, 1 = Articulation.
     int getTapRoleForUi() const;
 
+    // Bumped whenever the take buffer is reset (new take / clear) - the
+    // coordinator link watches this to know when to re-push a completed take.
+    int getTakeGenerationForUi() const { return takeGenerationUi.load(); }
+
+    bool isCoordinatorParamOn() const;
+
+    OrchCaptureLink& getLink() { return *link; }
+
     double getCurrentTempoBpm() const { return currentBpmUi.load(); }
 
     // Discard the take and start listening fresh. Safe to call while stopped or
@@ -105,6 +116,7 @@ private:
     std::atomic<float>* ksZoneMinParam = nullptr;
     std::atomic<float>* ksZoneMaxParam = nullptr;
     std::atomic<float>* ksExportModeParam = nullptr;
+    std::atomic<float>* coordinatorParam = nullptr;
 
     double sampleRate = 44100.0;
 
@@ -137,8 +149,11 @@ private:
     std::atomic<bool> transportPlayingUi { false };
     std::atomic<int> lastCapturedNoteUi { -1 };
     std::atomic<double> currentBpmUi { 120.0 };
+    std::atomic<int> takeGenerationUi { 0 };
 
     void refreshTakeStatus();
+
+    std::unique_ptr<OrchCaptureLink> link;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OrchCaptureAudioProcessor)
 };

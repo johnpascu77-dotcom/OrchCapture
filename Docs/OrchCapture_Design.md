@@ -1,7 +1,7 @@
 # OrchCapture — Design
 
 Date: 2026-08-30
-Status: Phase 1 built + live-tested; Phase 1b (two-tap) built, not yet live-tested.
+Status: Phase 1 + 1b built & live-tested. Phase 2 (coordinator) built, not yet live-tested.
 Repo: `C:\AudioDev\Repos\OrchCapture`. Plugin code `Ocap`, VST3, MIDI effect.
 GitHub: `johnpascu77-dotcom/OrchCapture` (public, like the rest of the Orch family).
 
@@ -44,9 +44,9 @@ matches what sounds.
 | Phase | What | Status |
 |---|---|---|
 | **1 — MVP** | Per-track plugin. Transparent passthrough, one "most recent take" note buffer, host track name, editor status, per-instance export: drag-out `.mid` + "Save .mid to folder…". | **built + live-tested 2026-08-30** |
-| **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built 2026-08-30, not yet live-tested** |
-| **2 — Coordinator** | `InterprocessConnectionServer` on port **47826**, a Coordinator toggle, a multi-lane UI keyed on `trackName + tapRole`, one **Export All** → merged multi-track `.mid` + drag-out, performance/KS track pairs matched by name. | planned |
-| **3 — Polish** | Tempo + section-marker track (from MC's blueprint, or a manual tempo map), transport/blueprint-triggered auto-arm, optional quantize-for-notation toggle, per-lane solo/exclude. | planned |
+| **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built + live-tested 2026-08-30** |
+| **2 — Coordinator** | `coordinator` param; the on instance binds `InterprocessConnectionServer` on port **47826**, every other instance auto-connects as a client and pushes its lane (name, role, completed take). Coordinator editor gains a lane list + merged export (drag-out / save) — one SMF with matched `<name>` / `<name> KS` track pairs. See §6. | **built 2026-08-30, not yet live-tested** |
+| **3 — Polish** | Tempo + section-marker track (from MC's blueprint, or a manual tempo map), transport/blueprint-triggered auto-arm, optional quantize-for-notation toggle, per-lane solo/exclude, explicit export-order control. | planned |
 
 ---
 
@@ -61,6 +61,7 @@ matches what sounds.
 | `tapRole` | Tap Role | Performance | Performance / Articulation. Drives the editor subtitle and (Phase 2) the coordinator's grouping. Does *not* change capture behaviour — the two roles differ only by where the instance is placed and the KS settings. |
 | `ksZoneMin` / `ksZoneMax` | KS Zone Min / Max | 12 / 23 | Note range treated as keyswitches. A captured note in `[min, max]` gets `isKeyswitch = true`. Default 12–23 = OrchNoteMapper's unified source window. |
 | `ksExportMode` | KS Export | Inline | Inline (one track), Separate Track (musical on track 1, KS on track 2 `<name> KS`), Exclude (musical only), KS Only. |
+| `coordinator` | Coordinator | off | On for exactly one instance in the rig — it becomes the export hub (binds port 47826, collects every other instance's take, editor drag-out/save produce the merged rig SMF). See §6. |
 
 State (`getStateInformation`) persists parameters only. The take itself is **ephemeral** — like MC's
 Score View buffer, it is not saved with the project.
@@ -159,7 +160,49 @@ the keyswitch events, aligned to the performance take by track name + onset ppq.
 
 ---
 
-## 6. Build
+## 6. Coordinator (Phase 2)
+
+`OrchCaptureLink` (one per instance) turns the rig's ~50 instances into a single export action.
+
+### Roles
+
+- `coordinator` param **off** → the instance runs as a **client**: a 1.5 s timer keeps a
+  `juce::InterprocessConnection` connected to `127.0.0.1:47826`, and pushes a `lane` message
+  (`uid`, track name, `tapRole`, tempo, `ksExportMode`, and the full note list as compact JSON)
+  on connect and on every completed take (transport-stop edge / `takeGeneration` change). Between
+  takes it sends a lightweight `status` (counts + playing) each tick.
+- `coordinator` param **on** → the instance binds port 47826 as an `InterprocessConnectionServer`
+  and collects every client's lane into a `uid → Lane` map. If the port is already held (another
+  instance is the coordinator) it reports `CoordinatorPortBusy` and keeps retrying so it can take
+  over if that instance leaves.
+
+All connection callbacks are on the message thread (`InterprocessConnection(true)`); the lane map
+and connection list are still mutex-guarded because `createConnectionObject` runs on the server's
+listener thread. Same local-socket pattern as MC's `PatternSyncServer` / `McpBridgeServer` and the
+Transport Companion.
+
+### Merged export
+
+The coordinator editor shows a **lane list** (its own lane first, then every client in first-seen
+order: `Vln I · Perf · 43n · 15.2b`, `Vln I · Artic · 22ks`). The **drag pad** and **Save** button
+switch to the merged file when this instance is the active coordinator:
+
+`writeMergedTakeMidi` → one Format-1 SMF, 960 tpqn: track 0 tempo/name, then every lane's note
+tracks (`planNoteTracks` per lane, honouring each lane's own `ksExportMode`), grouped by track name
+in first-seen order, Performance (`tapRole` 0) before Articulation (`tapRole` 1) within a group. So
+Dorico / the music21 script get `Violin I`, `Violin I KS`, `Viola`, `Viola KS`, … already paired.
+
+### Phase 2 risks to verify live (Bitwig)
+
+1. Localhost `InterprocessConnectionServer` across sandboxed plugin instances (PatternSync /
+   McpBridge / Transport Companion all prove this works — expected fine).
+2. ~50 clients on one server; JSON take payloads (~a few thousand notes each) on connect / take-end.
+3. The 100 ms `connectToSocket` retry on the client's message-thread timer while no coordinator
+   exists — should be imperceptible, but watch for editor jank on a big session.
+
+---
+
+## 7. Build
 
 ```
 cmake -S . -B build

@@ -37,6 +37,22 @@ namespace ocap
         double tempoBpm = 120.0;
         int ticksPerQuarterNote = 960;
         KeyswitchExportMode keyswitchMode = KeyswitchExportMode::Inline;
+        int tapRole = 0; // 0 = Performance, 1 = Articulation - merged-export ordering only
+    };
+
+    // One take plus how it wants to be laid out - the unit the coordinator
+    // collects from each connected lane for a merged export.
+    struct TakeForExport
+    {
+        TakeExportOptions options;
+        std::vector<CapturedNote> notes;
+    };
+
+    // A single named note track, ready to become one MidiMessageSequence.
+    struct NoteTrack
+    {
+        juce::String name;
+        std::vector<CapturedNote> notes;
     };
 
     // Smallest note length we will write, in quarter notes - guards against a
@@ -56,6 +72,11 @@ namespace ocap
     // 0 for an empty take.
     double takeLengthPpq (const std::vector<CapturedNote>& notes);
 
+    // The note-track layout for one take, per options.keyswitchMode, without
+    // writing anything. Input is normalised internally.
+    std::vector<NoteTrack> planNoteTracks (const std::vector<CapturedNote>& notes,
+                                           const TakeExportOptions& options);
+
     // Write a Format-1 SMF to `out`:
     //   track 0      - name + tempo meta
     //   track 1 (..2) - one or two note tracks, per options.keyswitchMode
@@ -63,4 +84,18 @@ namespace ocap
     void writeTakeMidi (const std::vector<CapturedNote>& notes,
                         const TakeExportOptions& options,
                         juce::OutputStream& out);
+
+    // Write one merged Format-1 SMF for the whole rig: track 0 = tempo/name,
+    // then every take's note tracks. Takes are grouped by options.trackName in
+    // first-seen order; within a group, Performance (tapRole 0) precedes
+    // Articulation (tapRole 1). Empty takes contribute nothing.
+    void writeMergedTakeMidi (const std::vector<TakeForExport>& takes,
+                              const juce::String& sessionName,
+                              double tempoBpm,
+                              int ticksPerQuarterNote,
+                              juce::OutputStream& out);
+
+    // Compact JSON round-trip for a take, for the coordinator socket link.
+    juce::var takeToVar (const std::vector<CapturedNote>& notes);
+    std::vector<CapturedNote> takeFromVar (const juce::var& value);
 }
