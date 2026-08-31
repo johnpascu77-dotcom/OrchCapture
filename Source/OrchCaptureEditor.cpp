@@ -190,9 +190,14 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     {
         const juce::String arrow (juce::CharPointer_UTF8 ("\xe2\x86\x92"));
         const bool ready = dragPad.canDrag && dragPad.canDrag();
-        if (coordinatorActive())
-            return ready ? "Drag ALL MIDI out  " + arrow : "Drag ALL MIDI out (no takes yet)";
-        return ready ? "Drag MIDI out  " + arrow : "Drag MIDI out (no take)";
+        const bool all = coordinatorActive();
+        const juce::String noun = all ? "ALL MIDI" : "MIDI";
+
+        if (ready)
+            return "Drag " + noun + " out  " + arrow;
+        if (audioProcessor.isTransportPlayingForUi())
+            return "Drag " + noun + " out (stop the transport)";
+        return all ? "Drag ALL MIDI out (no takes yet)" : "Drag MIDI out (no take)";
     };
     addAndMakeVisible (dragPad);
 

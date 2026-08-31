@@ -278,7 +278,7 @@ void OrchCaptureAudioProcessor::updateTrackProperties (const TrackProperties& pr
     if (properties.name.has_value())
     {
         const juce::ScopedLock sl (trackNameLock);
-        hostTrackName = *properties.name;
+        hostTrackName = properties.name->trim(); // stray host-label whitespace -> "<name>  KS" etc.
         haveHostTrackName.store (hostTrackName.isNotEmpty());
     }
 }
