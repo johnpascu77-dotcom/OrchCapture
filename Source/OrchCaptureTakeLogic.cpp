@@ -104,6 +104,35 @@ namespace ocap
         return out;
     }
 
+    std::vector<TempoMark> parseTempoMarks (const juce::String& text)
+    {
+        std::vector<TempoMark> out;
+
+        juce::StringArray tokens;
+        tokens.addTokens (text, ",\n;", "");
+
+        for (auto token : tokens)
+        {
+            token = token.trim();
+            const int colon = token.indexOfChar (':');
+            if (colon <= 0)
+                continue;
+
+            const auto barText = token.substring (0, colon).trim();
+            const auto bpmText = token.substring (colon + 1).trim();
+            if (! barText.containsOnly ("0123456789.-") || ! bpmText.containsOnly ("0123456789.-"))
+                continue;
+
+            const double bpm = bpmText.getDoubleValue();
+            if (bpm <= 0.0)
+                continue;
+
+            out.push_back ({ juce::jmax (1.0, barText.getDoubleValue()), bpm });
+        }
+
+        return out;
+    }
+
     juce::StringArray parseScoreOrder (const juce::String& text)
     {
         juce::StringArray out;
@@ -146,19 +175,44 @@ namespace ocap
 
     namespace
     {
+        int usPerQuarter (double bpm)
+        {
+            return static_cast<int> (std::llround (60000000.0 / juce::jmax (1.0, bpm)));
+        }
+
         juce::MidiMessageSequence tempoMetaTrack (const juce::String& name, double tempoBpm,
                                                  const std::vector<SectionMarker>& markers = {},
+                                                 const std::vector<TempoMark>& tempoChanges = {},
                                                  double barLengthPpq = 4.0, int tpqn = 960)
         {
+            const double barPpq = juce::jmax (0.25, barLengthPpq);
+
             juce::MidiMessageSequence meta;
             meta.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0.0);
-            const int microsecondsPerQuarter =
-                static_cast<int> (std::llround (60000000.0 / juce::jmax (1.0, tempoBpm)));
-            meta.addEvent (juce::MidiMessage::tempoMetaEvent (microsecondsPerQuarter), 0.0);
+
+            if (tempoChanges.empty())
+            {
+                meta.addEvent (juce::MidiMessage::tempoMetaEvent (usPerQuarter (tempoBpm)), 0.0);
+            }
+            else
+            {
+                bool haveAtZero = false;
+                for (const auto& t : tempoChanges)
+                {
+                    const double tick = juce::jmax (0.0, t.bar - 1.0) * barPpq * tpqn;
+                    if (tick <= 0.0)
+                        haveAtZero = true;
+                    meta.addEvent (juce::MidiMessage::tempoMetaEvent (usPerQuarter (t.bpm)), tick);
+                }
+                if (! haveAtZero) // always anchor a tempo at the start
+                    meta.addEvent (juce::MidiMessage::tempoMetaEvent (usPerQuarter (tempoBpm)), 0.0);
+            }
 
             for (const auto& m : markers)
             {
-                const double tick = juce::jmax (0.0, m.bar) * juce::jmax (0.25, barLengthPpq) * tpqn;
+                // m.bar is 1-indexed (bar 1 == the take's start == tick 0), to
+                // match how Bitwig / Dorico number bars.
+                const double tick = juce::jmax (0.0, m.bar - 1.0) * barPpq * tpqn;
                 meta.addEvent (juce::MidiMessage::textMetaEvent (6, m.label), tick); // 6 = marker
             }
 
@@ -255,7 +309,8 @@ namespace ocap
         midiFile.setTicksPerQuarterNote (tpqn);
         midiFile.addTrack (tempoMetaTrack (options.sessionName.isNotEmpty() ? options.sessionName
                                                                            : juce::String ("OrchCapture session"),
-                                           options.tempoBpm, options.markers, options.barLengthPpq, tpqn));
+                                           options.tempoBpm, options.markers, options.tempoChanges,
+                                           options.barLengthPpq, tpqn));
 
         for (const size_t idx : laneOrder)
             for (const auto& track : planNoteTracks (takes[idx].notes, takes[idx].options))

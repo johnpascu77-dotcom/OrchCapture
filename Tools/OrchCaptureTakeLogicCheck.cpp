@@ -350,28 +350,65 @@ int main()
             check (trackNameOf (*mf, 1) == "Cello KS", "merged KS only: KS tracks kept");
         }
 
-        // Section markers land on track 0.
+        // Section markers land on track 0. Bar is 1-indexed (bar 1 -> tick 0).
         {
             ocap::MergedExportOptions o;
-            o.markers = { { 0.0, "Intro" }, { 4.0, "A" } };
+            o.markers = { { 1.0, "Intro" }, { 5.0, "A" } };
             o.barLengthPpq = 4.0;
             o.ticksPerQuarterNote = 480;
             const auto mf = parseMerged (takes, o);
             const auto* meta = mf->getTrack (0);
             int markerCount = 0;
-            double secondMarkerTick = -1.0;
+            double firstMarkerTick = -1.0, secondMarkerTick = -1.0;
             for (int e = 0; e < meta->getNumEvents(); ++e)
             {
                 const auto& m = meta->getEventPointer (e)->message;
                 if (m.isMetaEvent() && m.getMetaEventType() == 6)
                 {
-                    if (++markerCount == 2)
-                        secondMarkerTick = m.getTimeStamp();
+                    if (++markerCount == 1) firstMarkerTick = m.getTimeStamp();
+                    if (markerCount == 2)    secondMarkerTick = m.getTimeStamp();
                 }
             }
             check (markerCount == 2, "merged: two section markers on the tempo track");
-            check (std::abs (secondMarkerTick - (4.0 * 4.0 * 480)) < 1.0, "merged: marker at bar 4 -> tick 7680 (480 tpqn)");
+            check (std::abs (firstMarkerTick) < 1.0, "merged: marker at bar 1 -> tick 0");
+            check (std::abs (secondMarkerTick - (4.0 * 4.0 * 480)) < 1.0, "merged: marker at bar 5 -> tick 7680 (480 tpqn)");
         }
+
+        // Hand-entered tempo marks land as tempo meta events at the right ticks.
+        {
+            ocap::MergedExportOptions o;
+            o.tempoChanges = { { 1.0, 60.0 }, { 5.0, 120.0 } };
+            o.barLengthPpq = 4.0;
+            o.ticksPerQuarterNote = 480;
+            const auto mf = parseMerged (takes, o);
+            const auto* meta = mf->getTrack (0);
+            int tempoCount = 0;
+            double changeTick = -1.0, changeBpm = 0.0;
+            for (int e = 0; e < meta->getNumEvents(); ++e)
+            {
+                const auto& m = meta->getEventPointer (e)->message;
+                if (m.isTempoMetaEvent())
+                {
+                    ++tempoCount;
+                    if (m.getTimeStamp() > 1.0)
+                    {
+                        changeTick = m.getTimeStamp();
+                        changeBpm = 60.0 / m.getTempoSecondsPerQuarterNote();
+                    }
+                }
+            }
+            check (tempoCount == 2, "merged: two tempo meta events");
+            check (std::abs (changeTick - (4.0 * 4.0 * 480)) < 1.0, "merged: tempo change at bar 5 -> tick 7680");
+            check (std::abs (changeBpm - 120.0) < 0.5, "merged: second tempo mark is 120 bpm");
+        }
+    }
+
+    // parseTempoMarks.
+    {
+        const auto t = ocap::parseTempoMarks ("1:58, 9 : 72 , junk, 17:44.5");
+        check (t.size() == 3, "parseTempoMarks: 3 valid, junk dropped");
+        check (t[1].bar == 9.0 && std::abs (t[1].bpm - 72.0) < 1e-9, "parseTempoMarks: trims bar and bpm");
+        check (t[2].bpm > 44.0 && t[2].bpm < 45.0, "parseTempoMarks: fractional bpm ok");
     }
 
     // quantizeTake.

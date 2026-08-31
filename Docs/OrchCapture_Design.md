@@ -47,8 +47,8 @@ matches what sounds.
 | **1 — MVP** | Per-track plugin. Transparent passthrough, one "most recent take" note buffer, host track name, editor status, per-instance export: drag-out `.mid` + "Save .mid to folder…". | **built + live-tested 2026-08-30** |
 | **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built + live-tested 2026-08-30** |
 | **2 — Coordinator** | `coordinator` param; the on instance binds `InterprocessConnectionServer` on port **47826**, every other instance auto-connects as a client and pushes its lane (name, role, completed take). Coordinator editor gains a lane list + merged export (drag-out / save) — one SMF with matched `<name>` / `<name> KS` track pairs. See §6. | **built + live-tested 2026-08-31** (froze first, fixed — see §6) |
-| **3 — Polish** | `quantizeGrid` per-instance notation quantize; coordinator `mergedContent` (Notes + KS / Notes only / KS only); coordinator section-marker + score-order free-text fields (persisted); click a lane to exclude it from the merged export. See §7. | **built 2026-08-31, not yet live-tested** |
-| **later** | Tempo *map* (bpm over time), transport/blueprint-triggered auto-arm (needs an MC/OSC signal). | deferred |
+| **3 — Polish** | `quantizeGrid` per-instance notation quantize; coordinator `mergedContent` (Notes + KS / Notes only / KS only); coordinator section-marker + tempo-mark + score-order free-text fields (persisted, hand-entered, 1-indexed bars); click a lane to exclude it from the merged export. See §7. | **built 2026-08-31, not yet live-tested** |
+| **later** | Transport/blueprint-triggered auto-arm (needs an MC/OSC signal); auto-capturing Bitwig's tempo automation as a tempo map (no VST3 API for host markers/tempo — would have to come from MC). | deferred |
 
 ---
 
@@ -67,12 +67,16 @@ matches what sounds.
 | `quantizeGrid` | Quantize | Off | Off / 1/4 / 1/8 / 1/16 / 1/8T / 1/16T / 1/32. Snaps this instance's export onsets **and** releases to the grid (min one grid unit long). As-performed by default. Each lane's setting is honoured in the merged export. |
 | `mergedContent` | Merged Content | Notes + KS | Coordinator only. Notes + KS / Notes only / KS only — filters `<name>` vs `<name> KS` tracks out of the merged file. |
 
-State (`getStateInformation`) persists parameters, plus two coordinator free-text fields stored as
+State (`getStateInformation`) persists parameters, plus three coordinator free-text fields stored as
 ValueTree properties on the APVTS state: `markersText` (`"bar:label, …"` → `textMetaEvent(6)`
-markers on the merged tempo track) and `scoreOrderText` (comma/newline instrument names → merged
-track order; unlisted names fall after in first-seen order). The take itself is **ephemeral** — like
-MC's Score View buffer, it is not saved with the project. Per-lane exclude (click a lane row on the
-coordinator) is editor-only, not persisted.
+markers), `tempoText` (`"bar:bpm, …"` → tempo meta events), and `scoreOrderText` (comma/newline
+instrument names → merged track order; unlisted names fall after in first-seen order). All three are
+1-indexed by bar and hand-entered — **not** read from Bitwig's arrangement (no VST3 API for host
+markers / tempo map). The take itself is **ephemeral** — like MC's Score View buffer, it is not saved
+with the project. Per-lane exclude (click a lane row on the coordinator) is editor-only, not persisted.
+
+Note timing is captured as musical ppq straight off the playhead, so note *positions* are already
+correct across Bitwig tempo automation — `tempoText` only controls the tempo *marks* Dorico shows.
 
 ### Capture (audio thread, `processBlock`)
 
@@ -254,11 +258,16 @@ half-bar keyswitch jitter is the "alive" mechanism, and music21 can quantize dow
 classifies each planned track by whether its name ends `" KS"` and drops the others. Notes only =
 a straight-to-Dorico file; KS only = feed for the music21 articulation pass.
 
-### Section markers + score order (coordinator, persisted free text)
+### Section markers + tempo marks + score order (coordinator, persisted free text)
 
 - **`markersText`** — `"bar:label"` tokens, comma / newline / semicolon separated
-  (`ocap::parseSectionMarkers`). Each becomes a `textMetaEvent(6, label)` on the merged tempo track
-  at `bar * barLengthPpq` (4/4 assumed). Malformed tokens are skipped.
+  (`ocap::parseSectionMarkers`). Bar is **1-indexed** (bar 1 == the take's start), to match Bitwig /
+  Dorico. Each becomes a `textMetaEvent(6, label)` on the merged tempo track at
+  `(bar - 1) * barLengthPpq` (4/4 assumed). Malformed tokens are skipped. **Not** read from Bitwig's
+  arrangement markers — no VST3 API for that.
+- **`tempoText`** — `"bar:bpm"` tokens (`ocap::parseTempoMarks`), same 1-indexed bars. Each becomes a
+  tempo meta event; an anchor tempo at tick 0 is always present. Empty → the single `tempoBpm`.
+  Note positions don't need this (they're musical ppq); it only sets the score's tempo marks.
 - **`scoreOrderText`** — comma / newline separated instrument track names
   (`ocap::parseScoreOrder`). `writeMergedTakeMidi` orders instruments by their index in this list;
   names not listed fall after, in first-seen order; Performance precedes Articulation within an

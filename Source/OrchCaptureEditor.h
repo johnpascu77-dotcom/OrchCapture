@@ -78,6 +78,8 @@ private:
     juce::ComboBox mergedContentBox;
     juce::Label markersLabel;
     juce::TextEditor markersEditor;
+    juce::Label tempoLabel;
+    juce::TextEditor tempoEditor;
     juce::Label scoreOrderLabel;
     juce::TextEditor scoreOrderEditor;
 

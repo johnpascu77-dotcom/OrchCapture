@@ -59,22 +59,30 @@ namespace ocap
     // Which tracks the merged rig export keeps.
     enum class MergedContent { NotesAndKeyswitches = 0, NotesOnly, KeyswitchesOnly };
 
-    // A rehearsal-mark / section label at a bar position, for the merged file's
-    // tempo track.
+    // A rehearsal-mark / section label at a bar position (1-indexed: bar 1 ==
+    // the take's start), for the merged file's tempo track.
     struct SectionMarker
     {
-        double bar = 0.0;
+        double bar = 1.0;
         juce::String label;
+    };
+
+    // A tempo mark at a bar position (1-indexed).
+    struct TempoMark
+    {
+        double bar = 1.0;
+        double bpm = 120.0;
     };
 
     struct MergedExportOptions
     {
         juce::String sessionName { "OrchCapture session" };
-        double tempoBpm = 120.0;
+        double tempoBpm = 120.0; // used when tempoChanges is empty
         int ticksPerQuarterNote = 960;
         double barLengthPpq = 4.0; // 4/4
         MergedContent content = MergedContent::NotesAndKeyswitches;
         std::vector<SectionMarker> markers;
+        std::vector<TempoMark> tempoChanges; // hand-entered; empty -> single tempoBpm at bar 1
         juce::StringArray scoreOrder; // instrument track names, in the order they should appear
     };
 
@@ -101,8 +109,11 @@ namespace ocap
     std::vector<CapturedNote> quantizeTake (std::vector<CapturedNote> notes, double gridPpq);
 
     // Parse "bar:label" tokens (one per line, or comma-separated) into markers.
-    // Malformed tokens are skipped. e.g. "0:Intro, 16:A, 32:B".
+    // Bar is 1-indexed. Malformed tokens are skipped. e.g. "1:Intro, 9:B".
     std::vector<SectionMarker> parseSectionMarkers (const juce::String& text);
+
+    // Parse "bar:bpm" tokens into tempo marks (bar 1-indexed). e.g. "1:58, 9:72".
+    std::vector<TempoMark> parseTempoMarks (const juce::String& text);
 
     // Parse a comma / newline separated list of instrument track names, trimmed,
     // empties dropped.

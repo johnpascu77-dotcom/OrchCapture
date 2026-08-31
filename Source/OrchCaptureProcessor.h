@@ -98,8 +98,10 @@ public:
     // ValueTree properties on the APVTS state, so they ride getStateInformation.
     juce::String getMarkersText() const;
     juce::String getScoreOrderText() const;
+    juce::String getTempoText() const;
     void setMarkersText (const juce::String&);
     void setScoreOrderText (const juce::String&);
+    void setTempoText (const juce::String&);
 
     double getCurrentTempoBpm() const { return currentBpmUi.load(); }
 

@@ -362,6 +362,7 @@ ocap::MergedExportOptions OrchCaptureAudioProcessor::buildMergedExportOptions() 
     options.content = static_cast<ocap::MergedContent> (content);
 
     options.markers = ocap::parseSectionMarkers (getMarkersText());
+    options.tempoChanges = ocap::parseTempoMarks (getTempoText());
     options.scoreOrder = ocap::parseScoreOrder (getScoreOrderText());
 
     return options;
@@ -377,6 +378,11 @@ juce::String OrchCaptureAudioProcessor::getScoreOrderText() const
     return parameters.state.getProperty ("scoreOrderText", juce::String()).toString();
 }
 
+juce::String OrchCaptureAudioProcessor::getTempoText() const
+{
+    return parameters.state.getProperty ("tempoText", juce::String()).toString();
+}
+
 void OrchCaptureAudioProcessor::setMarkersText (const juce::String& text)
 {
     parameters.state.setProperty ("markersText", text, nullptr);
@@ -385,6 +391,11 @@ void OrchCaptureAudioProcessor::setMarkersText (const juce::String& text)
 void OrchCaptureAudioProcessor::setScoreOrderText (const juce::String& text)
 {
     parameters.state.setProperty ("scoreOrderText", text, nullptr);
+}
+
+void OrchCaptureAudioProcessor::setTempoText (const juce::String& text)
+{
+    parameters.state.setProperty ("tempoText", text, nullptr);
 }
 
 juce::AudioProcessorEditor* OrchCaptureAudioProcessor::createEditor()

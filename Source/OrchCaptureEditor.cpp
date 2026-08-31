@@ -75,8 +75,8 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setResizable (true, true);
-    setResizeLimits (480, 560, 940, 1040);
-    setSize (580, 760);
+    setResizeLimits (480, 560, 940, 1120);
+    setSize (580, 812);
 
     auto& params = audioProcessor.getParameters();
 
@@ -185,12 +185,19 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
         addAndMakeVisible (te);
     };
 
-    markersLabel.setText ("Section markers  (bar:label, ...)", juce::dontSendNotification);
+    markersLabel.setText ("Section markers  (bar:label, ... - bar is 1-indexed)", juce::dontSendNotification);
     styleLabel (markersLabel, 12.0f);
     addAndMakeVisible (markersLabel);
-    styleTextEditor (markersEditor, "0:Intro, 16:A, 40:Coda");
+    styleTextEditor (markersEditor, "1:Intro, 9:Test 1");
     markersEditor.setText (audioProcessor.getMarkersText(), juce::dontSendNotification);
     markersEditor.onFocusLost = [this] { audioProcessor.setMarkersText (markersEditor.getText()); };
+
+    tempoLabel.setText ("Tempo marks  (bar:bpm, ... - not read from Bitwig)", juce::dontSendNotification);
+    styleLabel (tempoLabel, 12.0f);
+    addAndMakeVisible (tempoLabel);
+    styleTextEditor (tempoEditor, "1:58, 9:72");
+    tempoEditor.setText (audioProcessor.getTempoText(), juce::dontSendNotification);
+    tempoEditor.onFocusLost = [this] { audioProcessor.setTempoText (tempoEditor.getText()); };
 
     scoreOrderLabel.setText ("Score order  (track names, comma / newline)", juce::dontSendNotification);
     styleLabel (scoreOrderLabel, 12.0f);
@@ -283,7 +290,7 @@ void OrchCaptureAudioProcessorEditor::resized()
 
     juce::Component* coordWidgets[] {
         &mergedContentLabel, &mergedContentBox, &markersLabel, &markersEditor,
-        &scoreOrderLabel, &scoreOrderEditor, &laneList
+        &tempoLabel, &tempoEditor, &scoreOrderLabel, &scoreOrderEditor, &laneList
     };
     for (auto* c : coordWidgets)
         c->setVisible (coord);
@@ -349,10 +356,13 @@ void OrchCaptureAudioProcessorEditor::resized()
     {
         labelledRow (mergedContentLabel, mergedContentBox, 150);
         markersLabel.setBounds (area.removeFromTop (16));
-        markersEditor.setBounds (area.removeFromTop (40));
-        area.removeFromTop (6);
+        markersEditor.setBounds (area.removeFromTop (34));
+        area.removeFromTop (5);
+        tempoLabel.setBounds (area.removeFromTop (16));
+        tempoEditor.setBounds (area.removeFromTop (34));
+        area.removeFromTop (5);
         scoreOrderLabel.setBounds (area.removeFromTop (16));
-        scoreOrderEditor.setBounds (area.removeFromTop (40));
+        scoreOrderEditor.setBounds (area.removeFromTop (34));
         area.removeFromTop (8);
         laneList.setBounds (area);
     }
