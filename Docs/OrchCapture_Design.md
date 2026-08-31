@@ -1,8 +1,8 @@
 # OrchCapture — Design
 
-Date: 2026-08-30
-Status: Phase 1 + 1b built & live-tested. Phase 2 (coordinator) built; first live test froze
-Bitwig (message-thread socket work), reworked onto a background thread (`9cb45e9`) — needs re-test.
+Date: 2026-08-31
+Status: Phases 1, 1b, 2 built & live-tested (merged export → Dorico, zero cleanup). Phase 3 (polish)
+built, not yet live-tested.
 Repo: `C:\AudioDev\Repos\OrchCapture`. Plugin code `Ocap`, VST3, MIDI effect.
 GitHub: `johnpascu77-dotcom/OrchCapture` (public, like the rest of the Orch family).
 
@@ -46,8 +46,9 @@ matches what sounds.
 |---|---|---|
 | **1 — MVP** | Per-track plugin. Transparent passthrough, one "most recent take" note buffer, host track name, editor status, per-instance export: drag-out `.mid` + "Save .mid to folder…". | **built + live-tested 2026-08-30** |
 | **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built + live-tested 2026-08-30** |
-| **2 — Coordinator** | `coordinator` param; the on instance binds `InterprocessConnectionServer` on port **47826**, every other instance auto-connects as a client and pushes its lane (name, role, completed take). Coordinator editor gains a lane list + merged export (drag-out / save) — one SMF with matched `<name>` / `<name> KS` track pairs. See §6. | **built 2026-08-30, not yet live-tested** |
-| **3 — Polish** | Tempo + section-marker track (from MC's blueprint, or a manual tempo map), transport/blueprint-triggered auto-arm, optional quantize-for-notation toggle, per-lane solo/exclude, explicit export-order control. | planned |
+| **2 — Coordinator** | `coordinator` param; the on instance binds `InterprocessConnectionServer` on port **47826**, every other instance auto-connects as a client and pushes its lane (name, role, completed take). Coordinator editor gains a lane list + merged export (drag-out / save) — one SMF with matched `<name>` / `<name> KS` track pairs. See §6. | **built + live-tested 2026-08-31** (froze first, fixed — see §6) |
+| **3 — Polish** | `quantizeGrid` per-instance notation quantize; coordinator `mergedContent` (Notes + KS / Notes only / KS only); coordinator section-marker + score-order free-text fields (persisted); click a lane to exclude it from the merged export. See §7. | **built 2026-08-31, not yet live-tested** |
+| **later** | Tempo *map* (bpm over time), transport/blueprint-triggered auto-arm (needs an MC/OSC signal). | deferred |
 
 ---
 
@@ -63,9 +64,15 @@ matches what sounds.
 | `ksZoneMin` / `ksZoneMax` | KS Zone Min / Max | 12 / 23 | Note range treated as keyswitches. A captured note in `[min, max]` gets `isKeyswitch = true`. Default 12–23 = OrchNoteMapper's unified source window. |
 | `ksExportMode` | KS Export | Inline | Inline (one track), Separate Track (musical on track 1, KS on track 2 `<name> KS`), Exclude (musical only), KS Only. |
 | `coordinator` | Coordinator | off | On for exactly one instance in the rig — it becomes the export hub (binds port 47826, collects every other instance's take, editor drag-out/save produce the merged rig SMF). See §6. |
+| `quantizeGrid` | Quantize | Off | Off / 1/4 / 1/8 / 1/16 / 1/8T / 1/16T / 1/32. Snaps this instance's export onsets **and** releases to the grid (min one grid unit long). As-performed by default. Each lane's setting is honoured in the merged export. |
+| `mergedContent` | Merged Content | Notes + KS | Coordinator only. Notes + KS / Notes only / KS only — filters `<name>` vs `<name> KS` tracks out of the merged file. |
 
-State (`getStateInformation`) persists parameters only. The take itself is **ephemeral** — like MC's
-Score View buffer, it is not saved with the project.
+State (`getStateInformation`) persists parameters, plus two coordinator free-text fields stored as
+ValueTree properties on the APVTS state: `markersText` (`"bar:label, …"` → `textMetaEvent(6)`
+markers on the merged tempo track) and `scoreOrderText` (comma/newline instrument names → merged
+track order; unlisted names fall after in first-seen order). The take itself is **ephemeral** — like
+MC's Score View buffer, it is not saved with the project. Per-lane exclude (click a lane row on the
+coordinator) is editor-only, not persisted.
 
 ### Capture (audio thread, `processBlock`)
 
@@ -217,9 +224,59 @@ and no coordinator, that starved the message thread. Fixed `9cb45e9`: link moved
 3. No message-thread stall at the full instance count (the whole point of the `9cb45e9` rework —
    confirm it holds).
 
+### Phase 2 outcome
+
+Live-tested 2026-08-31: ~59 lanes auto-connected, merged export imported into Dorico with **zero
+MIDI cleanup**, paired `<name>` / `<name> KS` tracks, verified on an MPL-fed instrument (Oboe 1) and
+a pitch-randomized-clip instrument (Horn 1). The first attempt froze the host — root cause and fix
+above.
+
 ---
 
-## 7. Build
+## 7. Polish (Phase 3)
+
+All pure logic is in `OrchCaptureTakeLogic` and covered by `OrchCaptureTakeLogicCheck`.
+
+### Quantize for notation — `quantizeGrid` (per instance)
+
+`ocap::quantizeTake(notes, gridPpq)` snaps every onset and release to the nearest multiple of the
+grid, keeping a minimum length of one grid unit. `planNoteTracks` applies it before the KS split, so
+`writeTakeMidi` and `writeMergedTakeMidi` both get it. Grid ppq: 1/4 = 1.0, 1/8 = 0.5, 1/16 = 0.25,
+1/32 = 0.125, 1/8T = 1/3, 1/16T = 1/6. The client pushes its grid (`qgrid`) with the lane, so the
+coordinator quantizes each lane by that lane's own setting.
+
+Capture stays as-performed; this only affects the export. The KS taps are usually left `Off` (the
+half-bar keyswitch jitter is the "alive" mechanism, and music21 can quantize downstream).
+
+### Merged content — `mergedContent` (coordinator)
+
+`ocap::MergedContent` { NotesAndKeyswitches, NotesOnly, KeyswitchesOnly }. `writeMergedTakeMidi`
+classifies each planned track by whether its name ends `" KS"` and drops the others. Notes only =
+a straight-to-Dorico file; KS only = feed for the music21 articulation pass.
+
+### Section markers + score order (coordinator, persisted free text)
+
+- **`markersText`** — `"bar:label"` tokens, comma / newline / semicolon separated
+  (`ocap::parseSectionMarkers`). Each becomes a `textMetaEvent(6, label)` on the merged tempo track
+  at `bar * barLengthPpq` (4/4 assumed). Malformed tokens are skipped.
+- **`scoreOrderText`** — comma / newline separated instrument track names
+  (`ocap::parseScoreOrder`). `writeMergedTakeMidi` orders instruments by their index in this list;
+  names not listed fall after, in first-seen order; Performance precedes Articulation within an
+  instrument.
+
+Both are stored as ValueTree properties on the APVTS state (ride `getStateInformation`), edited in
+two `TextEditor`s on the coordinator, committed on focus-loss.
+
+### Per-lane exclude (coordinator, editor-only)
+
+Click a lane row to toggle it out of the merged export (struck through, "— excluded"). Keyed by the
+lane's `uid` (`"local"` for the coordinator's own lane). Passed to
+`OrchCaptureLink::collectTakesForExport(excludedUids)`; the editor's `collectFilteredTakes()`
+wraps it. Not persisted.
+
+---
+
+## 8. Build
 
 ```
 cmake -S . -B build

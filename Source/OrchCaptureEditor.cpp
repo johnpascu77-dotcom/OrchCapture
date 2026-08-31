@@ -75,8 +75,8 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setResizable (true, true);
-    setResizeLimits (470, 540, 900, 900);
-    setSize (560, 620);
+    setResizeLimits (480, 560, 940, 1040);
+    setSize (580, 760);
 
     auto& params = audioProcessor.getParameters();
 
@@ -144,10 +144,60 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     ksExportAttachment = std::make_unique<ComboBoxAttachment> (params, "ksExportMode", ksExportBox);
     ksExportBox.onChange = [this] { layoutRoleControls(); };
 
+    const auto styleCombo = [] (juce::ComboBox& b)
+    {
+        b.setColour (juce::ComboBox::backgroundColourId, juce::Colour::fromRGB (28, 36, 40));
+        b.setColour (juce::ComboBox::textColourId, juce::Colours::white);
+        b.setColour (juce::ComboBox::outlineColourId, kAccent);
+    };
+
+    quantizeLabel.setText ("Quantize", juce::dontSendNotification);
+    styleLabel (quantizeLabel, 13.0f, true);
+    addAndMakeVisible (quantizeLabel);
+    quantizeBox.addItemList ({ "Off", "1/4", "1/8", "1/16", "1/8T", "1/16T", "1/32" }, 1);
+    styleCombo (quantizeBox);
+    addAndMakeVisible (quantizeBox);
+    quantizeAttachment = std::make_unique<ComboBoxAttachment> (params, "quantizeGrid", quantizeBox);
+
     coordinatorButton.setButtonText ("Coordinator (rig export hub, port 47826)");
     coordinatorButton.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
     addAndMakeVisible (coordinatorButton);
     coordinatorAttachment = std::make_unique<ButtonAttachment> (params, "coordinator", coordinatorButton);
+    coordinatorButton.onClick = [this] { resized(); };
+
+    mergedContentLabel.setText ("Merged Content", juce::dontSendNotification);
+    styleLabel (mergedContentLabel, 13.0f, true);
+    addAndMakeVisible (mergedContentLabel);
+    mergedContentBox.addItemList ({ "Notes + KS", "Notes only", "KS only" }, 1);
+    styleCombo (mergedContentBox);
+    addAndMakeVisible (mergedContentBox);
+    mergedContentAttachment = std::make_unique<ComboBoxAttachment> (params, "mergedContent", mergedContentBox);
+
+    const auto styleTextEditor = [this] (juce::TextEditor& te, const juce::String& placeholder)
+    {
+        te.setMultiLine (true, false);
+        te.setReturnKeyStartsNewLine (true);
+        te.setColour (juce::TextEditor::backgroundColourId, juce::Colour::fromRGB (24, 30, 34));
+        te.setColour (juce::TextEditor::textColourId, juce::Colours::white);
+        te.setColour (juce::TextEditor::outlineColourId, juce::Colour::fromRGB (60, 74, 70));
+        te.setFont (juce::FontOptions (12.0f));
+        te.setTextToShowWhenEmpty (placeholder, juce::Colour::fromRGB (110, 120, 118));
+        addAndMakeVisible (te);
+    };
+
+    markersLabel.setText ("Section markers  (bar:label, ...)", juce::dontSendNotification);
+    styleLabel (markersLabel, 12.0f);
+    addAndMakeVisible (markersLabel);
+    styleTextEditor (markersEditor, "0:Intro, 16:A, 40:Coda");
+    markersEditor.setText (audioProcessor.getMarkersText(), juce::dontSendNotification);
+    markersEditor.onFocusLost = [this] { audioProcessor.setMarkersText (markersEditor.getText()); };
+
+    scoreOrderLabel.setText ("Score order  (track names, comma / newline)", juce::dontSendNotification);
+    styleLabel (scoreOrderLabel, 12.0f);
+    addAndMakeVisible (scoreOrderLabel);
+    styleTextEditor (scoreOrderEditor, "Piccolo, Flute 1, Oboe 1, ...");
+    scoreOrderEditor.setText (audioProcessor.getScoreOrderText(), juce::dontSendNotification);
+    scoreOrderEditor.onFocusLost = [this] { audioProcessor.setScoreOrderText (scoreOrderEditor.getText()); };
 
     coordinatorStatusLabel.setJustificationType (juce::Justification::centredLeft);
     coordinatorStatusLabel.setColour (juce::Label::textColourId, juce::Colour::fromRGB (150, 200, 175));
@@ -179,8 +229,9 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
             return false;
         if (coordinatorActive())
         {
+            const auto muted = excludedUids();
             for (const auto& row : laneRows)
-                if (row.haveTake)
+                if (row.haveTake && muted.count (row.uid) == 0)
                     return true;
             return false;
         }
@@ -227,59 +278,84 @@ void OrchCaptureAudioProcessorEditor::paint (juce::Graphics& g)
 
 void OrchCaptureAudioProcessorEditor::resized()
 {
+    const bool coord = audioProcessor.isCoordinatorParamOn();
+    lastCoordinatorVisible = coord;
+
+    juce::Component* coordWidgets[] {
+        &mergedContentLabel, &mergedContentBox, &markersLabel, &markersEditor,
+        &scoreOrderLabel, &scoreOrderEditor, &laneList
+    };
+    for (auto* c : coordWidgets)
+        c->setVisible (coord);
+
     auto area = getLocalBounds().reduced (22, 16);
 
     titleLabel.setBounds (area.removeFromTop (32));
     subtitleLabel.setBounds (area.removeFromTop (18));
     buildLabel.setBounds (area.removeFromTop (16));
-    area.removeFromTop (12);
+    area.removeFromTop (10);
 
-    trackNameLabel.setBounds (area.removeFromTop (24));
-    area.removeFromTop (4);
-    statusLabel.setBounds (area.removeFromTop (24));
-    area.removeFromTop (14);
+    trackNameLabel.setBounds (area.removeFromTop (22));
+    area.removeFromTop (3);
+    statusLabel.setBounds (area.removeFromTop (22));
+    area.removeFromTop (12);
 
     enableButton.setBounds (area.removeFromTop (24));
     area.removeFromTop (2);
     resetOnPlayButton.setBounds (area.removeFromTop (24));
-    area.removeFromTop (12);
+    area.removeFromTop (10);
+
+    const auto labelledRow = [&area] (juce::Component& label, juce::Component& field, int fieldW)
+    {
+        auto r = area.removeFromTop (26);
+        label.setBounds (r.removeFromLeft (130));
+        field.setBounds (r.removeFromLeft (fieldW));
+        area.removeFromTop (6);
+    };
 
     {
         auto rowR = area.removeFromTop (26);
         tapRoleLabel.setBounds (rowR.removeFromLeft (130));
         tapRoleBox.setBounds (rowR);
+        area.removeFromTop (6);
     }
-    area.removeFromTop (6);
     {
         auto rowZ = area.removeFromTop (26);
         ksZoneLabel.setBounds (rowZ.removeFromLeft (130));
         ksZoneMinSlider.setBounds (rowZ.removeFromLeft (100));
         rowZ.removeFromLeft (10);
         ksZoneMaxSlider.setBounds (rowZ.removeFromLeft (100));
+        area.removeFromTop (6);
     }
+    labelledRow (ksExportLabel, ksExportBox, 180);
+    labelledRow (quantizeLabel, quantizeBox, 110);
     area.removeFromTop (6);
-    {
-        auto rowE = area.removeFromTop (26);
-        ksExportLabel.setBounds (rowE.removeFromLeft (130));
-        ksExportBox.setBounds (rowE.removeFromLeft (180));
-    }
-    area.removeFromTop (12);
 
     coordinatorButton.setBounds (area.removeFromTop (24));
     area.removeFromTop (2);
     coordinatorStatusLabel.setBounds (area.removeFromTop (18));
     area.removeFromTop (6);
 
-    // Bottom-anchored: drag pad + button row, then the lane list fills the gap.
+    // Bottom-anchored: drag pad + button row.
     auto row = area.removeFromBottom (30);
     saveButton.setBounds (row.removeFromLeft (row.getWidth() * 2 / 3).reduced (0, 2));
     row.removeFromLeft (8);
     clearButton.setBounds (row.reduced (0, 2));
     area.removeFromBottom (10);
-    dragPad.setBounds (area.removeFromBottom (50));
+    dragPad.setBounds (area.removeFromBottom (48));
     area.removeFromBottom (10);
 
-    laneList.setBounds (area);
+    if (coord)
+    {
+        labelledRow (mergedContentLabel, mergedContentBox, 150);
+        markersLabel.setBounds (area.removeFromTop (16));
+        markersEditor.setBounds (area.removeFromTop (40));
+        area.removeFromTop (6);
+        scoreOrderLabel.setBounds (area.removeFromTop (16));
+        scoreOrderEditor.setBounds (area.removeFromTop (40));
+        area.removeFromTop (8);
+        laneList.setBounds (area);
+    }
 }
 
 void OrchCaptureAudioProcessorEditor::layoutRoleControls()
@@ -301,12 +377,43 @@ bool OrchCaptureAudioProcessorEditor::coordinatorActive() const
     return audioProcessor.getLink().getMode() == OrchCaptureLink::Mode::Coordinator;
 }
 
+std::set<juce::String> OrchCaptureAudioProcessorEditor::excludedUids() const
+{
+    return mutedLaneUids;
+}
+
+std::vector<ocap::TakeForExport> OrchCaptureAudioProcessorEditor::collectFilteredTakes() const
+{
+    return audioProcessor.getLink().collectTakesForExport (mutedLaneUids);
+}
+
+void OrchCaptureAudioProcessorEditor::listBoxItemClicked (int row, const juce::MouseEvent&)
+{
+    if (row < 0 || row >= static_cast<int> (laneRows.size()))
+        return;
+
+    const auto uid = laneRows[static_cast<size_t> (row)].uid;
+    if (uid.isEmpty())
+        return;
+
+    if (mutedLaneUids.count (uid) != 0)
+        mutedLaneUids.erase (uid);
+    else
+        mutedLaneUids.insert (uid);
+
+    laneList.repaint();
+    dragPad.repaint();
+}
+
 void OrchCaptureAudioProcessorEditor::timerCallback()
 {
     updateStatus();
 
     auto& link = audioProcessor.getLink();
     const auto linkMode = link.getMode();
+
+    if (audioProcessor.isCoordinatorParamOn() != lastCoordinatorVisible)
+        resized();
 
     laneRows = link.getLaneRows();
     laneList.updateContent();
@@ -334,10 +441,6 @@ void OrchCaptureAudioProcessorEditor::timerCallback()
             break;
     }
     coordinatorStatusLabel.setText (coordText, juce::dontSendNotification);
-
-    const bool showList = linkMode == OrchCaptureLink::Mode::Coordinator;
-    laneList.setVisible (showList);
-
     dragPad.repaint();
 }
 
@@ -353,18 +456,22 @@ void OrchCaptureAudioProcessorEditor::paintListBoxItem (int row, juce::Graphics&
         return;
 
     const auto& r = laneRows[static_cast<size_t> (row)];
+    const bool muted = mutedLaneUids.count (r.uid) != 0;
 
     g.setColour (row % 2 == 0 ? juce::Colour::fromRGB (24, 30, 34)
                               : juce::Colour::fromRGB (20, 26, 30));
     g.fillRect (0, 0, width, height);
 
-    if (r.playing)
+    if (r.playing && ! muted)
     {
         g.setColour (juce::Colour::fromRGB (245, 205, 120));
         g.fillEllipse (6.0f, height * 0.5f - 3.0f, 6.0f, 6.0f);
     }
 
-    g.setColour (r.haveTake ? juce::Colours::white : juce::Colour::fromRGB (120, 130, 128));
+    const auto textColour = muted ? juce::Colour::fromRGB (90, 98, 96)
+                                  : (r.haveTake ? juce::Colours::white
+                                                : juce::Colour::fromRGB (120, 130, 128));
+    g.setColour (textColour);
     g.setFont (juce::FontOptions (12.0f));
 
     juce::String line;
@@ -375,8 +482,17 @@ void OrchCaptureAudioProcessorEditor::paintListBoxItem (int row, juce::Graphics&
     if (r.keyswitchCount > 0)
         line << " / " << r.keyswitchCount << "ks";
     line << "   " << juce::String (r.lengthPpq / 4.0, 1) << "b";
+    if (muted)
+        line << "   - excluded";
 
     g.drawText (line, 18, 0, width - 22, height, juce::Justification::centredLeft);
+
+    if (muted)
+    {
+        g.setColour (textColour);
+        const float y = height * 0.5f;
+        g.drawLine (18.0f, y, (float) width - 8.0f, y, 1.0f);
+    }
 }
 
 void OrchCaptureAudioProcessorEditor::updateStatus()
@@ -431,7 +547,7 @@ juce::File OrchCaptureAudioProcessorEditor::writeMergedToTempFile()
     if (audioProcessor.isTransportPlayingForUi())
         return {};
 
-    const auto takes = audioProcessor.getLink().collectTakesForExport();
+    const auto takes = collectFilteredTakes();
     if (takes.empty())
         return {};
 
@@ -441,8 +557,7 @@ juce::File OrchCaptureAudioProcessorEditor::writeMergedToTempFile()
     if (! stream.openedOk())
         return {};
 
-    ocap::writeMergedTakeMidi (takes, "OrchCapture session",
-                               audioProcessor.getLink().getSessionTempoBpm(), 960, stream);
+    ocap::writeMergedTakeMidi (takes, audioProcessor.buildMergedExportOptions(), stream);
     stream.flush();
     return file;
 }
@@ -457,7 +572,7 @@ void OrchCaptureAudioProcessorEditor::saveToFolder()
         return;
     }
 
-    const bool haveSomething = merged ? ! audioProcessor.getLink().collectTakesForExport().empty()
+    const bool haveSomething = merged ? ! collectFilteredTakes().empty()
                                       : audioProcessor.getTakeNoteCountForUi() > 0;
     if (! haveSomething)
     {
@@ -497,11 +612,10 @@ void OrchCaptureAudioProcessorEditor::saveToFolder()
 
         if (merged)
         {
-            const auto takes = audioProcessor.getLink().collectTakesForExport();
+            const auto takes = collectFilteredTakes();
             if (takes.empty())
                 return;
-            ocap::writeMergedTakeMidi (takes, "OrchCapture session",
-                                       audioProcessor.getLink().getSessionTempoBpm(), 960, stream);
+            ocap::writeMergedTakeMidi (takes, audioProcessor.buildMergedExportOptions(), stream);
         }
         else
         {

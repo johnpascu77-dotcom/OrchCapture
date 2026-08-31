@@ -37,7 +37,8 @@ namespace ocap
         double tempoBpm = 120.0;
         int ticksPerQuarterNote = 960;
         KeyswitchExportMode keyswitchMode = KeyswitchExportMode::Inline;
-        int tapRole = 0; // 0 = Performance, 1 = Articulation - merged-export ordering only
+        int tapRole = 0;             // 0 = Performance, 1 = Articulation - merged-export ordering only
+        double quantizeGridPpq = 0.0; // 0 = as performed; else snap onset+release to this grid
     };
 
     // One take plus how it wants to be laid out - the unit the coordinator
@@ -53,6 +54,28 @@ namespace ocap
     {
         juce::String name;
         std::vector<CapturedNote> notes;
+    };
+
+    // Which tracks the merged rig export keeps.
+    enum class MergedContent { NotesAndKeyswitches = 0, NotesOnly, KeyswitchesOnly };
+
+    // A rehearsal-mark / section label at a bar position, for the merged file's
+    // tempo track.
+    struct SectionMarker
+    {
+        double bar = 0.0;
+        juce::String label;
+    };
+
+    struct MergedExportOptions
+    {
+        juce::String sessionName { "OrchCapture session" };
+        double tempoBpm = 120.0;
+        int ticksPerQuarterNote = 960;
+        double barLengthPpq = 4.0; // 4/4
+        MergedContent content = MergedContent::NotesAndKeyswitches;
+        std::vector<SectionMarker> markers;
+        juce::StringArray scoreOrder; // instrument track names, in the order they should appear
     };
 
     // Smallest note length we will write, in quarter notes - guards against a
@@ -72,6 +95,19 @@ namespace ocap
     // 0 for an empty take.
     double takeLengthPpq (const std::vector<CapturedNote>& notes);
 
+    // Snap every onset and release to the nearest multiple of gridPpq, keeping
+    // a minimum length of one grid unit. gridPpq <= 0 returns the take
+    // untouched. Pure.
+    std::vector<CapturedNote> quantizeTake (std::vector<CapturedNote> notes, double gridPpq);
+
+    // Parse "bar:label" tokens (one per line, or comma-separated) into markers.
+    // Malformed tokens are skipped. e.g. "0:Intro, 16:A, 32:B".
+    std::vector<SectionMarker> parseSectionMarkers (const juce::String& text);
+
+    // Parse a comma / newline separated list of instrument track names, trimmed,
+    // empties dropped.
+    juce::StringArray parseScoreOrder (const juce::String& text);
+
     // The note-track layout for one take, per options.keyswitchMode, without
     // writing anything. Input is normalised internally.
     std::vector<NoteTrack> planNoteTracks (const std::vector<CapturedNote>& notes,
@@ -85,14 +121,14 @@ namespace ocap
                         const TakeExportOptions& options,
                         juce::OutputStream& out);
 
-    // Write one merged Format-1 SMF for the whole rig: track 0 = tempo/name,
-    // then every take's note tracks. Takes are grouped by options.trackName in
-    // first-seen order; within a group, Performance (tapRole 0) precedes
-    // Articulation (tapRole 1). Empty takes contribute nothing.
+    // Write one merged Format-1 SMF for the whole rig: track 0 = tempo/name +
+    // any section markers, then every take's note tracks. Tracks are ordered by
+    // options.scoreOrder (names not listed fall after, in first-seen order);
+    // within an instrument, Performance (tapRole 0) precedes Articulation
+    // (tapRole 1). options.content filters note vs "<name> KS" tracks. Empty
+    // takes contribute nothing.
     void writeMergedTakeMidi (const std::vector<TakeForExport>& takes,
-                              const juce::String& sessionName,
-                              double tempoBpm,
-                              int ticksPerQuarterNote,
+                              const MergedExportOptions& options,
                               juce::OutputStream& out);
 
     // Compact JSON round-trip for a take, for the coordinator socket link.

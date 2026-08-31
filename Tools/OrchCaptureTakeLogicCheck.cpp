@@ -1,6 +1,7 @@
 #include "OrchCaptureTakeLogic.h"
 
 #include <iostream>
+#include <memory>
 #include <string>
 
 namespace
@@ -292,24 +293,105 @@ int main()
         // Deliberately out of order: Cello artic first, then Viola perf/artic, then Cello perf.
         std::vector<ocap::TakeForExport> takes { artic ("Cello"), perf ("Viola"), artic ("Viola"), perf ("Cello") };
 
-        juce::MemoryOutputStream mos;
-        ocap::writeMergedTakeMidi (takes, "Session", 96.0, 960, mos);
-        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
-
-        juce::MemoryInputStream in (data, false);
-        juce::MidiFile mf;
-        check (mf.readFrom (in), "merged file parses");
-        check (mf.getNumTracks() == 5, "merged file = tempo + Cello + Cello KS + Viola + Viola KS");
-
-        auto trackName = [&] (int i) {
+        auto trackNameOf = [] (juce::MidiFile& mf, int i) {
             const auto* seq = mf.getTrack (i);
             for (int e = 0; e < seq->getNumEvents(); ++e)
-                if (seq->getEventPointer (e)->message.isTextMetaEvent())
-                    return seq->getEventPointer (e)->message.getTextFromTextMetaEvent();
+            {
+                const auto& m = seq->getEventPointer (e)->message;
+                if (m.isTextMetaEvent() && m.getTextFromTextMetaEvent() != juce::String())
+                    return m.getTextFromTextMetaEvent();
+            }
             return juce::String();
         };
-        check (trackName (1) == "Cello" && trackName (2) == "Cello KS", "merged: Cello group first (first-seen), Perf before Artic");
-        check (trackName (3) == "Viola" && trackName (4) == "Viola KS", "merged: Viola group second");
+        auto parseMerged = [] (const std::vector<ocap::TakeForExport>& t, const ocap::MergedExportOptions& o) {
+            juce::MemoryOutputStream mos;
+            ocap::writeMergedTakeMidi (t, o, mos);
+            juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+            juce::MemoryInputStream in (data, false);
+            auto mf = std::make_shared<juce::MidiFile>();
+            mf->readFrom (in);
+            return mf;
+        };
+
+        {
+            ocap::MergedExportOptions o;
+            o.sessionName = "Session";
+            o.tempoBpm = 96.0;
+            const auto mf = parseMerged (takes, o);
+            check (mf->getNumTracks() == 5, "merged: tempo + Cello + Cello KS + Viola + Viola KS");
+            check (trackNameOf (*mf, 1) == "Cello" && trackNameOf (*mf, 2) == "Cello KS",
+                   "merged: Cello group first (first-seen), Perf before Artic");
+            check (trackNameOf (*mf, 3) == "Viola" && trackNameOf (*mf, 4) == "Viola KS",
+                   "merged: Viola group second");
+        }
+
+        // Score order overrides first-seen.
+        {
+            ocap::MergedExportOptions o;
+            o.scoreOrder = { "Viola", "Cello" };
+            const auto mf = parseMerged (takes, o);
+            check (trackNameOf (*mf, 1) == "Viola" && trackNameOf (*mf, 3) == "Cello",
+                   "merged: scoreOrder puts Viola before Cello");
+        }
+
+        // Content filter.
+        {
+            ocap::MergedExportOptions o;
+            o.content = ocap::MergedContent::NotesOnly;
+            const auto mf = parseMerged (takes, o);
+            check (mf->getNumTracks() == 3, "merged Notes only: tempo + Cello + Viola");
+            check (trackNameOf (*mf, 1) == "Cello" && trackNameOf (*mf, 2) == "Viola", "merged Notes only: no KS tracks");
+        }
+        {
+            ocap::MergedExportOptions o;
+            o.content = ocap::MergedContent::KeyswitchesOnly;
+            const auto mf = parseMerged (takes, o);
+            check (mf->getNumTracks() == 3, "merged KS only: tempo + Cello KS + Viola KS");
+            check (trackNameOf (*mf, 1) == "Cello KS", "merged KS only: KS tracks kept");
+        }
+
+        // Section markers land on track 0.
+        {
+            ocap::MergedExportOptions o;
+            o.markers = { { 0.0, "Intro" }, { 4.0, "A" } };
+            o.barLengthPpq = 4.0;
+            o.ticksPerQuarterNote = 480;
+            const auto mf = parseMerged (takes, o);
+            const auto* meta = mf->getTrack (0);
+            int markerCount = 0;
+            double secondMarkerTick = -1.0;
+            for (int e = 0; e < meta->getNumEvents(); ++e)
+            {
+                const auto& m = meta->getEventPointer (e)->message;
+                if (m.isMetaEvent() && m.getMetaEventType() == 6)
+                {
+                    if (++markerCount == 2)
+                        secondMarkerTick = m.getTimeStamp();
+                }
+            }
+            check (markerCount == 2, "merged: two section markers on the tempo track");
+            check (std::abs (secondMarkerTick - (4.0 * 4.0 * 480)) < 1.0, "merged: marker at bar 4 -> tick 7680 (480 tpqn)");
+        }
+    }
+
+    // quantizeTake.
+    {
+        std::vector<ocap::CapturedNote> take { makeNote (0.51, 0.98, 60), makeNote (1.26, 1.30, 62) };
+        const auto q = ocap::quantizeTake (take, 0.5); // 1/8 grid
+        check (std::abs (q[0].ppqOn - 0.5) < 1e-9 && std::abs (q[0].ppqOff - 1.0) < 1e-9, "quantize 1/8: 0.51..0.98 -> 0.5..1.0");
+        check (std::abs (q[1].ppqOn - 1.5) < 1e-9 && std::abs (q[1].ppqOff - 2.0) < 1e-9, "quantize 1/8: 1.26..1.30 -> 1.5..2.0 (min one grid)");
+        check (ocap::quantizeTake (take, 0.0).size() == 2 && std::abs (ocap::quantizeTake (take, 0.0)[0].ppqOn - 0.51) < 1e-9,
+               "quantize grid 0 = untouched");
+    }
+
+    // parseSectionMarkers / parseScoreOrder.
+    {
+        const auto m = ocap::parseSectionMarkers ("0:Intro, 16 : A ,  bad line , 32:Coda\n40:End");
+        check (m.size() == 4, "parseSectionMarkers: 4 valid tokens, malformed dropped");
+        check (m[1].bar == 16.0 && m[1].label == "A", "parseSectionMarkers: trims bar and label");
+
+        const auto o = ocap::parseScoreOrder ("Piccolo, Flute 1\n Oboe 1 ,, Clarinet 1 ");
+        check (o.size() == 4 && o[1] == "Flute 1" && o[2] == "Oboe 1", "parseScoreOrder: split, trim, drop empties");
     }
 
     std::cout << "-------------------------\n";

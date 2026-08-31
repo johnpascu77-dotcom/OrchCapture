@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
 #include <JuceHeader.h>
 
@@ -49,6 +50,7 @@ public:
 
     struct LaneRow
     {
+        juce::String uid;      // stable per instance; "local" for the coordinator's own lane
         juce::String trackName;
         int role = 0;          // 0 Performance, 1 Articulation
         int noteCount = 0;
@@ -60,8 +62,14 @@ public:
     };
 
     std::vector<LaneRow> getLaneRows() const;
-    std::vector<ocap::TakeForExport> collectTakesForExport() const;
+
+    // The coordinator's own take plus every client lane that has one, minus any
+    // whose uid is in `excludedUids`. Ready for ocap::writeMergedTakeMidi.
+    std::vector<ocap::TakeForExport> collectTakesForExport (
+        const std::set<juce::String>& excludedUids = {}) const;
+
     double getSessionTempoBpm() const;
+    juce::String getLocalUid() const { return localUid; }
 
 private:
     class ClientConnection;
@@ -87,6 +95,7 @@ private:
         juce::String uid, trackName;
         int role = 0, ksMode = 0;
         double tempoBpm = 120.0;
+        double quantizeGridPpq = 0.0;
         bool playing = false;
         int noteCount = 0, keyswitchCount = 0;
         double lengthPpq = 0.0;

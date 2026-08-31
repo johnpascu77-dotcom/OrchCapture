@@ -86,7 +86,20 @@ public:
 
     bool isCoordinatorParamOn() const;
 
+    // Quantize grid in quarter notes for this instance's export (0 = off).
+    double getQuantizeGridPpq() const;
+
     OrchCaptureLink& getLink() { return *link; }
+
+    ocap::MergedExportOptions buildMergedExportOptions() const;
+
+    // Persisted free-text (coordinator editor): "bar:label, …" and a
+    // comma/newline list of instrument track names in score order. Stored as
+    // ValueTree properties on the APVTS state, so they ride getStateInformation.
+    juce::String getMarkersText() const;
+    juce::String getScoreOrderText() const;
+    void setMarkersText (const juce::String&);
+    void setScoreOrderText (const juce::String&);
 
     double getCurrentTempoBpm() const { return currentBpmUi.load(); }
 
@@ -117,6 +130,8 @@ private:
     std::atomic<float>* ksZoneMaxParam = nullptr;
     std::atomic<float>* ksExportModeParam = nullptr;
     std::atomic<float>* coordinatorParam = nullptr;
+    std::atomic<float>* quantizeGridParam = nullptr;
+    std::atomic<float>* mergedContentParam = nullptr;
 
     double sampleRate = 44100.0;
 

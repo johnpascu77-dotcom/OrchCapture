@@ -256,6 +256,7 @@ void OrchCaptureLink::pushLaneFromClient (bool includeNotes)
         const auto options = processor.buildExportOptions();
         obj->setProperty ("tempo", options.tempoBpm);
         obj->setProperty ("ksmode", static_cast<int> (options.keyswitchMode));
+        obj->setProperty ("qgrid", options.quantizeGridPpq);
         obj->setProperty ("notes", ocap::takeToVar (processor.snapshotTake()));
     }
 
@@ -297,6 +298,7 @@ void OrchCaptureLink::onClientMessage (CoordinatorConnection* connection, const 
     {
         lane.tempoBpm = static_cast<double> (message.getProperty ("tempo", lane.tempoBpm));
         lane.ksMode = static_cast<int> (message.getProperty ("ksmode", lane.ksMode));
+        lane.quantizeGridPpq = static_cast<double> (message.getProperty ("qgrid", lane.quantizeGridPpq));
         lane.notes = ocap::takeFromVar (message["notes"]);
         lane.haveNotes = true;
     }
@@ -335,6 +337,7 @@ std::vector<OrchCaptureLink::LaneRow> OrchCaptureLink::getLaneRows() const
     std::vector<LaneRow> rows;
 
     LaneRow local;
+    local.uid = localUid;
     local.trackName = processor.getTrackNameForUi();
     local.role = processor.getTapRoleForUi();
     local.noteCount = processor.getTakeNoteCountForUi();
@@ -359,6 +362,7 @@ std::vector<OrchCaptureLink::LaneRow> OrchCaptureLink::getLaneRows() const
         for (const auto* lane : sorted)
         {
             LaneRow row;
+            row.uid = lane->uid;
             row.trackName = lane->trackName;
             row.role = lane->role;
             row.noteCount = lane->noteCount;
@@ -374,13 +378,15 @@ std::vector<OrchCaptureLink::LaneRow> OrchCaptureLink::getLaneRows() const
     return rows;
 }
 
-std::vector<ocap::TakeForExport> OrchCaptureLink::collectTakesForExport() const
+std::vector<ocap::TakeForExport> OrchCaptureLink::collectTakesForExport (
+    const std::set<juce::String>& excludedUids) const
 {
     std::vector<ocap::TakeForExport> out;
 
     if (mode.load() != Mode::Coordinator)
         return out;
 
+    if (excludedUids.count (localUid) == 0)
     {
         auto localNotes = processor.snapshotTake();
         if (! localNotes.empty())
@@ -400,6 +406,8 @@ std::vector<ocap::TakeForExport> OrchCaptureLink::collectTakesForExport() const
     {
         if (! lane->haveNotes || lane->notes.empty())
             continue;
+        if (excludedUids.count (lane->uid) != 0)
+            continue;
 
         ocap::TakeExportOptions options;
         options.trackName = lane->trackName.isNotEmpty() ? lane->trackName : juce::String ("Lane");
@@ -407,6 +415,7 @@ std::vector<ocap::TakeForExport> OrchCaptureLink::collectTakesForExport() const
         options.ticksPerQuarterNote = 960;
         options.keyswitchMode = static_cast<ocap::KeyswitchExportMode> (juce::jlimit (0, 3, lane->ksMode));
         options.tapRole = lane->role;
+        options.quantizeGridPpq = lane->quantizeGridPpq;
 
         out.push_back ({ options, lane->notes });
     }

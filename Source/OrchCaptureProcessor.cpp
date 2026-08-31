@@ -23,6 +23,8 @@ OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
     ksZoneMaxParam = parameters.getRawParameterValue ("ksZoneMax");
     ksExportModeParam = parameters.getRawParameterValue ("ksExportMode");
     coordinatorParam = parameters.getRawParameterValue ("coordinator");
+    quantizeGridParam = parameters.getRawParameterValue ("quantizeGrid");
+    mergedContentParam = parameters.getRawParameterValue ("mergedContent");
 
     capturedNotes.reserve (4096);
     openNotes.reserve (256);
@@ -66,6 +68,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::c
     // its editor gains "Export All".
     params.push_back (std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "coordinator", 1 }, "Coordinator", false));
+
+    // Notation-quantize this instance's export onsets/releases (0 = as performed).
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "quantizeGrid", 1 }, "Quantize",
+        juce::StringArray { "Off", "1/4", "1/8", "1/16", "1/8T", "1/16T", "1/32" }, 0));
+
+    // Coordinator merged export: which tracks to keep.
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "mergedContent", 1 }, "Merged Content",
+        juce::StringArray { "Notes + KS", "Notes only", "KS only" }, 0));
 
     return { params.begin(), params.end() };
 }
@@ -312,18 +324,67 @@ bool OrchCaptureAudioProcessor::isCoordinatorParamOn() const
     return coordinatorParam != nullptr && coordinatorParam->load() >= 0.5f;
 }
 
+double OrchCaptureAudioProcessor::getQuantizeGridPpq() const
+{
+    // choices: Off, 1/4, 1/8, 1/16, 1/8T, 1/16T, 1/32
+    static const double grids[] = { 0.0, 1.0, 0.5, 0.25, 1.0 / 3.0, 1.0 / 6.0, 0.125 };
+    const int idx = quantizeGridParam != nullptr
+        ? juce::jlimit (0, 6, juce::roundToInt (quantizeGridParam->load())) : 0;
+    return grids[idx];
+}
+
 ocap::TakeExportOptions OrchCaptureAudioProcessor::buildExportOptions() const
 {
     ocap::TakeExportOptions options;
     options.trackName = getTrackNameForUi();
     options.tempoBpm = juce::jmax (1.0, currentBpmUi.load());
     options.ticksPerQuarterNote = 960;
+    options.tapRole = getTapRoleForUi();
+    options.quantizeGridPpq = getQuantizeGridPpq();
 
     const int mode = ksExportModeParam != nullptr
         ? juce::jlimit (0, 3, juce::roundToInt (ksExportModeParam->load())) : 0;
     options.keyswitchMode = static_cast<ocap::KeyswitchExportMode> (mode);
 
     return options;
+}
+
+ocap::MergedExportOptions OrchCaptureAudioProcessor::buildMergedExportOptions() const
+{
+    ocap::MergedExportOptions options;
+    options.sessionName = "OrchCapture session";
+    options.tempoBpm = juce::jmax (1.0, currentBpmUi.load());
+    options.ticksPerQuarterNote = 960;
+    options.barLengthPpq = 4.0;
+
+    const int content = mergedContentParam != nullptr
+        ? juce::jlimit (0, 2, juce::roundToInt (mergedContentParam->load())) : 0;
+    options.content = static_cast<ocap::MergedContent> (content);
+
+    options.markers = ocap::parseSectionMarkers (getMarkersText());
+    options.scoreOrder = ocap::parseScoreOrder (getScoreOrderText());
+
+    return options;
+}
+
+juce::String OrchCaptureAudioProcessor::getMarkersText() const
+{
+    return parameters.state.getProperty ("markersText", juce::String()).toString();
+}
+
+juce::String OrchCaptureAudioProcessor::getScoreOrderText() const
+{
+    return parameters.state.getProperty ("scoreOrderText", juce::String()).toString();
+}
+
+void OrchCaptureAudioProcessor::setMarkersText (const juce::String& text)
+{
+    parameters.state.setProperty ("markersText", text, nullptr);
+}
+
+void OrchCaptureAudioProcessor::setScoreOrderText (const juce::String& text)
+{
+    parameters.state.setProperty ("scoreOrderText", text, nullptr);
 }
 
 juce::AudioProcessorEditor* OrchCaptureAudioProcessor::createEditor()

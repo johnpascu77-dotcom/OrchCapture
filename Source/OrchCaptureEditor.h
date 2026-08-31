@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <vector>
 #include <JuceHeader.h>
 #include "OrchCaptureProcessor.h"
@@ -25,8 +26,11 @@ private:
     // ListBoxModel - the coordinator's lane list.
     int getNumRows() override;
     void paintListBoxItem (int row, juce::Graphics&, int width, int height, bool selected) override;
+    void listBoxItemClicked (int row, const juce::MouseEvent&) override;
 
     bool coordinatorActive() const;
+    std::set<juce::String> excludedUids() const;
+    std::vector<ocap::TakeForExport> collectFilteredTakes() const;
 
     // Writes the current take (or, on the coordinator, the merged rig take) to a
     // temp .mid and returns it, or an invalid File{} if there is nothing to
@@ -64,10 +68,21 @@ private:
     juce::Slider ksZoneMinSlider, ksZoneMaxSlider;
     juce::Label ksExportLabel;
     juce::ComboBox ksExportBox;
+    juce::Label quantizeLabel;
+    juce::ComboBox quantizeBox;
 
     juce::ToggleButton coordinatorButton;
     juce::Label coordinatorStatusLabel;
     juce::ListBox laneList { "lanes", this };
+    juce::Label mergedContentLabel;
+    juce::ComboBox mergedContentBox;
+    juce::Label markersLabel;
+    juce::TextEditor markersEditor;
+    juce::Label scoreOrderLabel;
+    juce::TextEditor scoreOrderEditor;
+
+    std::set<juce::String> mutedLaneUids;
+    bool lastCoordinatorVisible = false;
 
     juce::Label trackNameLabel;
     juce::Label statusLabel;
@@ -87,7 +102,9 @@ private:
     std::unique_ptr<SliderAttachment> ksZoneMinAttachment;
     std::unique_ptr<SliderAttachment> ksZoneMaxAttachment;
     std::unique_ptr<ComboBoxAttachment> ksExportAttachment;
+    std::unique_ptr<ComboBoxAttachment> quantizeAttachment;
     std::unique_ptr<ButtonAttachment> coordinatorAttachment;
+    std::unique_ptr<ComboBoxAttachment> mergedContentAttachment;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 

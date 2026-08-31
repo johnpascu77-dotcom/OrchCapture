@@ -58,10 +58,65 @@ namespace ocap
         return juce::jmax (0.0, latest - juce::jmin (earliest, 0.0));
     }
 
+    std::vector<CapturedNote> quantizeTake (std::vector<CapturedNote> notes, double gridPpq)
+    {
+        if (gridPpq <= 0.0)
+            return notes;
+
+        for (auto& n : notes)
+        {
+            const double on = juce::jmax (0.0, std::round (n.ppqOn / gridPpq) * gridPpq);
+            double off = std::round (n.ppqOff / gridPpq) * gridPpq;
+            if (off < on + gridPpq)
+                off = on + gridPpq;
+            n.ppqOn = on;
+            n.ppqOff = off;
+        }
+
+        return notes;
+    }
+
+    std::vector<SectionMarker> parseSectionMarkers (const juce::String& text)
+    {
+        std::vector<SectionMarker> out;
+
+        juce::StringArray tokens;
+        tokens.addTokens (text, ",\n;", "");
+
+        for (auto token : tokens)
+        {
+            token = token.trim();
+            if (token.isEmpty())
+                continue;
+
+            const int colon = token.indexOfChar (':');
+            if (colon <= 0)
+                continue;
+
+            const auto barText = token.substring (0, colon).trim();
+            const auto label = token.substring (colon + 1).trim();
+            if (label.isEmpty() || ! barText.containsOnly ("0123456789.-"))
+                continue;
+
+            out.push_back ({ juce::jmax (0.0, barText.getDoubleValue()), label });
+        }
+
+        return out;
+    }
+
+    juce::StringArray parseScoreOrder (const juce::String& text)
+    {
+        juce::StringArray out;
+        out.addTokens (text, ",\n;", "");
+        out.trim();
+        out.removeEmptyStrings();
+        return out;
+    }
+
     std::vector<NoteTrack> planNoteTracks (const std::vector<CapturedNote>& notes,
                                            const TakeExportOptions& options)
     {
-        const auto normalized = normalizeTake (notes);
+        const auto normalized = normalizeTake (quantizeTake (notes, options.quantizeGridPpq));
 
         std::vector<CapturedNote> musical, keyswitch;
         for (const auto& n : normalized)
@@ -91,15 +146,40 @@ namespace ocap
 
     namespace
     {
-        juce::MidiMessageSequence tempoMetaTrack (const juce::String& name, double tempoBpm)
+        juce::MidiMessageSequence tempoMetaTrack (const juce::String& name, double tempoBpm,
+                                                 const std::vector<SectionMarker>& markers = {},
+                                                 double barLengthPpq = 4.0, int tpqn = 960)
         {
             juce::MidiMessageSequence meta;
             meta.addEvent (juce::MidiMessage::textMetaEvent (3, name), 0.0);
             const int microsecondsPerQuarter =
                 static_cast<int> (std::llround (60000000.0 / juce::jmax (1.0, tempoBpm)));
             meta.addEvent (juce::MidiMessage::tempoMetaEvent (microsecondsPerQuarter), 0.0);
+
+            for (const auto& m : markers)
+            {
+                const double tick = juce::jmax (0.0, m.bar) * juce::jmax (0.25, barLengthPpq) * tpqn;
+                meta.addEvent (juce::MidiMessage::textMetaEvent (6, m.label), tick); // 6 = marker
+            }
+
             meta.updateMatchedPairs();
             return meta;
+        }
+
+        bool isKeyswitchTrackName (const juce::String& name)
+        {
+            return name.endsWith (" KS");
+        }
+
+        bool keepTrack (const juce::String& name, MergedContent content)
+        {
+            switch (content)
+            {
+                case MergedContent::NotesOnly:        return ! isKeyswitchTrackName (name);
+                case MergedContent::KeyswitchesOnly:  return isKeyswitchTrackName (name);
+                case MergedContent::NotesAndKeyswitches:
+                default:                              return true;
+            }
         }
 
         void appendNoteTrack (juce::MidiFile& midiFile, const NoteTrack& track, int tpqn)
@@ -139,41 +219,48 @@ namespace ocap
     }
 
     void writeMergedTakeMidi (const std::vector<TakeForExport>& takes,
-                              const juce::String& sessionName,
-                              double tempoBpm,
-                              int ticksPerQuarterNote,
+                              const MergedExportOptions& options,
                               juce::OutputStream& out)
     {
-        const int tpqn = juce::jlimit (24, 3840, ticksPerQuarterNote);
+        const int tpqn = juce::jlimit (24, 3840, options.ticksPerQuarterNote);
 
-        // First-seen order of instrument track names.
-        juce::StringArray order;
+        // First-seen order of instrument track names (fallback for anything not
+        // named in options.scoreOrder).
+        juce::StringArray firstSeen;
         for (const auto& t : takes)
-            order.addIfNotAlreadyThere (t.options.trackName);
+            firstSeen.addIfNotAlreadyThere (t.options.trackName);
 
-        // Stable index into `takes`, sorted by (first-seen trackName, tapRole).
+        const auto rank = [&] (const juce::String& name)
+        {
+            const int explicitIdx = options.scoreOrder.indexOf (name);
+            if (explicitIdx >= 0)
+                return explicitIdx;
+            return options.scoreOrder.size() + juce::jmax (0, firstSeen.indexOf (name));
+        };
+
         std::vector<size_t> laneOrder (takes.size());
         for (size_t i = 0; i < takes.size(); ++i)
             laneOrder[i] = i;
 
         std::stable_sort (laneOrder.begin(), laneOrder.end(), [&] (size_t a, size_t b)
         {
-            const int ga = order.indexOf (takes[a].options.trackName);
-            const int gb = order.indexOf (takes[b].options.trackName);
-            if (ga != gb)
-                return ga < gb;
+            const int ra = rank (takes[a].options.trackName);
+            const int rb = rank (takes[b].options.trackName);
+            if (ra != rb)
+                return ra < rb;
             return takes[a].options.tapRole < takes[b].options.tapRole;
         });
 
         juce::MidiFile midiFile;
         midiFile.setTicksPerQuarterNote (tpqn);
-        midiFile.addTrack (tempoMetaTrack (sessionName.isNotEmpty() ? sessionName
-                                                                    : juce::String ("OrchCapture session"),
-                                           tempoBpm));
+        midiFile.addTrack (tempoMetaTrack (options.sessionName.isNotEmpty() ? options.sessionName
+                                                                           : juce::String ("OrchCapture session"),
+                                           options.tempoBpm, options.markers, options.barLengthPpq, tpqn));
 
         for (const size_t idx : laneOrder)
             for (const auto& track : planNoteTracks (takes[idx].notes, takes[idx].options))
-                appendNoteTrack (midiFile, track, tpqn);
+                if (keepTrack (track.name, options.content))
+                    appendNoteTrack (midiFile, track, tpqn);
 
         midiFile.writeTo (out);
     }
