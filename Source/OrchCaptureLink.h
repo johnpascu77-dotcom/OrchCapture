@@ -79,6 +79,9 @@ private:
     void run() override;
     void reconcileMode();
     void serviceClient();
+    void serviceAutoSave();
+    void performAutoSave();
+    bool anyLanePlaying() const;
     void pushLaneFromClient (bool includeNotes);
     void teardownServer();
     static juce::File lockFile();
@@ -117,6 +120,8 @@ private:
     bool clientWasConnected = false;
     bool clientWasPlaying = false;
     int clientLastPushedGeneration = -1;
+    bool coordinatorWasPlaying = false;
+    juce::int64 pendingAutoSaveMs = 0; // 0 = nothing pending
 
     mutable std::mutex lanesMutex;
     std::vector<std::unique_ptr<CoordinatorConnection>> serverConnections;

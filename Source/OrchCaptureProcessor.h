@@ -93,15 +93,25 @@ public:
 
     ocap::MergedExportOptions buildMergedExportOptions() const;
 
-    // Persisted free-text (coordinator editor): "bar:label, …" and a
-    // comma/newline list of instrument track names in score order. Stored as
-    // ValueTree properties on the APVTS state, so they ride getStateInformation.
+    // Persisted coordinator-editor free text. Mirrored into lock-guarded members
+    // (the Link's worker thread reads them for auto-save) and into APVTS-state
+    // ValueTree properties (so they ride getStateInformation). Message thread
+    // writes, either thread reads.
     juce::String getMarkersText() const;
     juce::String getScoreOrderText() const;
     juce::String getTempoText() const;
+    juce::String getAutoSaveFolder() const;
     void setMarkersText (const juce::String&);
     void setScoreOrderText (const juce::String&);
     void setTempoText (const juce::String&);
+    void setAutoSaveFolder (const juce::String&);
+
+    bool isAutoSaveOnStopParamOn() const;
+
+    // Called by the Link after it writes an auto-save file.
+    void noteAutoSave (const juce::String& fileName);
+    int getAutoSaveCountForUi() const { return autoSaveCountUi.load(); }
+    juce::String getLastAutoSaveNameForUi() const;
 
     double getCurrentTempoBpm() const { return currentBpmUi.load(); }
 
@@ -134,6 +144,7 @@ private:
     std::atomic<float>* coordinatorParam = nullptr;
     std::atomic<float>* quantizeGridParam = nullptr;
     std::atomic<float>* mergedContentParam = nullptr;
+    std::atomic<float>* autoSaveOnStopParam = nullptr;
 
     double sampleRate = 44100.0;
 
@@ -167,6 +178,11 @@ private:
     std::atomic<int> lastCapturedNoteUi { -1 };
     std::atomic<double> currentBpmUi { 120.0 };
     std::atomic<int> takeGenerationUi { 0 };
+    std::atomic<int> autoSaveCountUi { 0 };
+
+    // Coordinator meta text, guarded so the Link worker thread can read it.
+    mutable juce::CriticalSection metaTextLock;
+    juce::String markersText, tempoText, scoreOrderText, autoSaveFolder, lastAutoSaveName;
 
     void refreshTakeStatus();
 

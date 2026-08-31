@@ -76,6 +76,10 @@ private:
     juce::ListBox laneList { "lanes", this };
     juce::Label mergedContentLabel;
     juce::ComboBox mergedContentBox;
+    juce::ToggleButton autoSaveButton;
+    juce::TextButton autoSaveFolderButton { "Auto-save folder..." };
+    juce::Label autoSaveFolderLabel;
+    int lastAutoSaveCount = 0;
     juce::Label markersLabel;
     juce::TextEditor markersEditor;
     juce::Label tempoLabel;
@@ -107,6 +111,7 @@ private:
     std::unique_ptr<ComboBoxAttachment> quantizeAttachment;
     std::unique_ptr<ButtonAttachment> coordinatorAttachment;
     std::unique_ptr<ComboBoxAttachment> mergedContentAttachment;
+    std::unique_ptr<ButtonAttachment> autoSaveAttachment;
 
     std::unique_ptr<juce::FileChooser> fileChooser;
 

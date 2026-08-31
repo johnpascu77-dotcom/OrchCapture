@@ -75,8 +75,8 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     setResizable (true, true);
-    setResizeLimits (480, 560, 940, 1120);
-    setSize (580, 812);
+    setResizeLimits (480, 560, 940, 1180);
+    setSize (580, 866);
 
     auto& params = audioProcessor.getParameters();
 
@@ -172,6 +172,38 @@ OrchCaptureAudioProcessorEditor::OrchCaptureAudioProcessorEditor (OrchCaptureAud
     styleCombo (mergedContentBox);
     addAndMakeVisible (mergedContentBox);
     mergedContentAttachment = std::make_unique<ComboBoxAttachment> (params, "mergedContent", mergedContentBox);
+
+    autoSaveButton.setButtonText ("Auto-save merged .mid on transport stop");
+    autoSaveButton.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
+    addAndMakeVisible (autoSaveButton);
+    autoSaveAttachment = std::make_unique<ButtonAttachment> (params, "autoSaveOnStop", autoSaveButton);
+
+    addAndMakeVisible (autoSaveFolderButton);
+    autoSaveFolderButton.onClick = [this]
+    {
+        fileChooser = std::make_unique<juce::FileChooser> ("Auto-save folder",
+                                                           juce::File (audioProcessor.getAutoSaveFolder()));
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode
+                                      | juce::FileBrowserComponent::canSelectDirectories,
+                                  [this] (const juce::FileChooser& fc)
+        {
+            const auto dir = fc.getResult();
+            if (dir.isDirectory())
+            {
+                audioProcessor.setAutoSaveFolder (dir.getFullPathName());
+                autoSaveFolderLabel.setText (dir.getFullPathName(), juce::dontSendNotification);
+            }
+        });
+    };
+
+    autoSaveFolderLabel.setJustificationType (juce::Justification::centredLeft);
+    autoSaveFolderLabel.setColour (juce::Label::textColourId, juce::Colour::fromRGB (150, 200, 175));
+    autoSaveFolderLabel.setFont (juce::FontOptions (11.0f));
+    autoSaveFolderLabel.setText (audioProcessor.getAutoSaveFolder().isNotEmpty()
+                                     ? audioProcessor.getAutoSaveFolder()
+                                     : juce::String ("(no folder set - auto-save is inactive)"),
+                                 juce::dontSendNotification);
+    addAndMakeVisible (autoSaveFolderLabel);
 
     const auto styleTextEditor = [this] (juce::TextEditor& te, const juce::String& placeholder)
     {
@@ -289,7 +321,8 @@ void OrchCaptureAudioProcessorEditor::resized()
     lastCoordinatorVisible = coord;
 
     juce::Component* coordWidgets[] {
-        &mergedContentLabel, &mergedContentBox, &markersLabel, &markersEditor,
+        &mergedContentLabel, &mergedContentBox, &autoSaveButton, &autoSaveFolderButton,
+        &autoSaveFolderLabel, &markersLabel, &markersEditor,
         &tempoLabel, &tempoEditor, &scoreOrderLabel, &scoreOrderEditor, &laneList
     };
     for (auto* c : coordWidgets)
@@ -355,6 +388,13 @@ void OrchCaptureAudioProcessorEditor::resized()
     if (coord)
     {
         labelledRow (mergedContentLabel, mergedContentBox, 150);
+        {
+            auto rowA = area.removeFromTop (24);
+            autoSaveButton.setBounds (rowA.removeFromLeft (rowA.getWidth() - 140));
+            autoSaveFolderButton.setBounds (rowA.reduced (0, 1));
+        }
+        autoSaveFolderLabel.setBounds (area.removeFromTop (16));
+        area.removeFromTop (8);
         markersLabel.setBounds (area.removeFromTop (16));
         markersEditor.setBounds (area.removeFromTop (34));
         area.removeFromTop (5);
@@ -440,6 +480,16 @@ void OrchCaptureAudioProcessorEditor::timerCallback()
                     ++withTakes;
             coordText << "Coordinator active  |  " << (int) laneRows.size() << " lanes  |  "
                       << withTakes << " with a take";
+
+            const int saves = audioProcessor.getAutoSaveCountForUi();
+            if (saves != lastAutoSaveCount)
+            {
+                lastAutoSaveCount = saves;
+                statusLabel.setText ("Auto-saved " + audioProcessor.getLastAutoSaveNameForUi(),
+                                     juce::dontSendNotification);
+            }
+            if (saves > 0)
+                coordText << "  |  auto-saved " << saves << (saves == 1 ? " file" : " files");
             break;
         }
         case OrchCaptureLink::Mode::CoordinatorPortBusy:

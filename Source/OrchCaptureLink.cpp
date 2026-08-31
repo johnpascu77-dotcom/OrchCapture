@@ -5,8 +5,9 @@
 
 namespace
 {
-    constexpr int kPollMs = 3000;          // worker loop interval
-    constexpr int kConnectTimeoutMs = 300; // blocking connect - worker thread only, never the message thread
+    constexpr int kPollMs = 3000;            // worker loop interval
+    constexpr int kConnectTimeoutMs = 300;   // blocking connect - worker thread only, never the message thread
+    constexpr juce::int64 kAutoSaveSettleMs = 7000; // wait for every client to push its final take before auto-saving
 
     void sendJson (juce::InterprocessConnection& connection, const juce::var& value)
     {
@@ -133,7 +134,9 @@ void OrchCaptureLink::run()
     {
         reconcileMode();
 
-        if (mode.load() != Mode::Coordinator)
+        if (mode.load() == Mode::Coordinator)
+            serviceAutoSave();
+        else
             serviceClient();
 
         wait (kPollMs);
@@ -141,6 +144,64 @@ void OrchCaptureLink::run()
 
     client.reset();
     teardownServer();
+}
+
+bool OrchCaptureLink::anyLanePlaying() const
+{
+    std::lock_guard<std::mutex> lock (lanesMutex);
+    for (const auto& entry : lanes)
+        if (entry.second.playing)
+            return true;
+    return false;
+}
+
+void OrchCaptureLink::serviceAutoSave()
+{
+    // "Playing" = the coordinator's own transport OR any connected lane's - so
+    // this works even if the coordinator instance sits on a track the host
+    // isn't processing.
+    const bool playing = processor.isTransportPlayingForUi() || anyLanePlaying();
+    const bool justStopped = coordinatorWasPlaying && ! playing;
+    coordinatorWasPlaying = playing;
+
+    if (justStopped && processor.isAutoSaveOnStopParamOn())
+        pendingAutoSaveMs = juce::Time::currentTimeMillis() + kAutoSaveSettleMs;
+
+    // A restart before the timer fires cancels the pending save.
+    if (playing)
+        pendingAutoSaveMs = 0;
+
+    if (pendingAutoSaveMs != 0 && juce::Time::currentTimeMillis() >= pendingAutoSaveMs)
+    {
+        pendingAutoSaveMs = 0;
+        performAutoSave();
+    }
+}
+
+void OrchCaptureLink::performAutoSave()
+{
+    if (! processor.isAutoSaveOnStopParamOn())
+        return;
+
+    const juce::File folder (processor.getAutoSaveFolder());
+    if (processor.getAutoSaveFolder().isEmpty() || ! folder.isDirectory())
+        return;
+
+    const auto takes = collectTakesForExport();
+    if (takes.empty())
+        return;
+
+    const auto file = folder.getChildFile ("OrchCapture_session_"
+        + juce::Time::getCurrentTime().formatted ("%Y%m%d_%H%M%S") + ".mid");
+
+    juce::FileOutputStream stream (file);
+    if (! stream.openedOk())
+        return;
+
+    ocap::writeMergedTakeMidi (takes, processor.buildMergedExportOptions(), stream);
+    stream.flush();
+
+    processor.noteAutoSave (file.getFileName());
 }
 
 void OrchCaptureLink::reconcileMode()

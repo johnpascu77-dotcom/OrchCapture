@@ -47,8 +47,8 @@ matches what sounds.
 | **1 — MVP** | Per-track plugin. Transparent passthrough, one "most recent take" note buffer, host track name, editor status, per-instance export: drag-out `.mid` + "Save .mid to folder…". | **built + live-tested 2026-08-30** |
 | **1b — Two-tap** | `tapRole` (Performance / Articulation), `ksZoneMin/Max` (default 12–23), `ksExportMode` (Inline / Separate Track / Exclude / KS Only). `CapturedNote.isKeyswitch` tagged at capture; `writeTakeMidi` lays out one or two note tracks. Same binary in both roles. See §5. | **built + live-tested 2026-08-30** |
 | **2 — Coordinator** | `coordinator` param; the on instance binds `InterprocessConnectionServer` on port **47826**, every other instance auto-connects as a client and pushes its lane (name, role, completed take). Coordinator editor gains a lane list + merged export (drag-out / save) — one SMF with matched `<name>` / `<name> KS` track pairs. See §6. | **built + live-tested 2026-08-31** (froze first, fixed — see §6) |
-| **3 — Polish** | `quantizeGrid` per-instance notation quantize; coordinator `mergedContent` (Notes + KS / Notes only / KS only); coordinator section-marker + tempo-mark + score-order free-text fields (persisted, hand-entered, 1-indexed bars); click a lane to exclude it from the merged export. See §7. | **built 2026-08-31, not yet live-tested** |
-| **later** | Transport/blueprint-triggered auto-arm (needs an MC/OSC signal); auto-capturing Bitwig's tempo automation as a tempo map (no VST3 API for host markers/tempo — would have to come from MC). | deferred |
+| **3 — Polish** | `quantizeGrid` per-instance notation quantize; coordinator `mergedContent` (Notes + KS / Notes only / KS only); coordinator section-marker + tempo-mark + score-order free-text fields (persisted, hand-entered, 1-indexed bars); click a lane to exclude it; **auto-save the merged `.mid` to a folder on transport stop**. See §7. | **built 2026-08-31; markers/tempo/order live-verified in Dorico, auto-save not yet tested** |
+| **later** | Auto-capturing Bitwig's tempo automation as a tempo map (no VST3 API for host markers/tempo — would have to come from MC). | deferred |
 
 ---
 
@@ -66,13 +66,15 @@ matches what sounds.
 | `coordinator` | Coordinator | off | On for exactly one instance in the rig — it becomes the export hub (binds port 47826, collects every other instance's take, editor drag-out/save produce the merged rig SMF). See §6. |
 | `quantizeGrid` | Quantize | Off | Off / 1/4 / 1/8 / 1/16 / 1/8T / 1/16T / 1/32. Snaps this instance's export onsets **and** releases to the grid (min one grid unit long). As-performed by default. Each lane's setting is honoured in the merged export. |
 | `mergedContent` | Merged Content | Notes + KS | Coordinator only. Notes + KS / Notes only / KS only — filters `<name>` vs `<name> KS` tracks out of the merged file. |
+| `autoSaveOnStop` | Auto-save on stop | off | Coordinator only. When on (and a folder is set), the Link writes `OrchCapture_session_<timestamp>.mid` to the auto-save folder ~7 s after the transport stops — hands-free capture runs. Ignores per-lane exclude (always the full rig). |
 
-State (`getStateInformation`) persists parameters, plus three coordinator free-text fields stored as
-ValueTree properties on the APVTS state: `markersText` (`"bar:label, …"` → `textMetaEvent(6)`
-markers), `tempoText` (`"bar:bpm, …"` → tempo meta events), and `scoreOrderText` (comma/newline
-instrument names → merged track order; unlisted names fall after in first-seen order). All three are
-1-indexed by bar and hand-entered — **not** read from Bitwig's arrangement (no VST3 API for host
-markers / tempo map). The take itself is **ephemeral** — like MC's Score View buffer, it is not saved
+State (`getStateInformation`) persists parameters, plus four coordinator strings — `markersText`
+(`"bar:label, …"` → `textMetaEvent(6)` markers), `tempoText` (`"bar:bpm, …"` → tempo meta events),
+`scoreOrderText` (comma/newline instrument names → merged track order; unlisted names fall after in
+first-seen order), and `autoSaveFolder`. Marker/tempo/order fields are 1-indexed by bar and
+hand-entered — **not** read from Bitwig's arrangement (no VST3 API). Each is mirrored into a
+`metaTextLock`-guarded member (the Link worker thread reads them for auto-save) and an APVTS-state
+ValueTree property (persistence); message thread writes, either thread reads. The take itself is **ephemeral** — like MC's Score View buffer, it is not saved
 with the project. Per-lane exclude (click a lane row on the coordinator) is editor-only, not persisted.
 
 Note timing is captured as musical ppq straight off the playhead, so note *positions* are already
@@ -282,6 +284,19 @@ Click a lane row to toggle it out of the merged export (struck through, "— exc
 lane's `uid` (`"local"` for the coordinator's own lane). Passed to
 `OrchCaptureLink::collectTakesForExport(excludedUids)`; the editor's `collectFilteredTakes()`
 wraps it. Not persisted.
+
+### Auto-save on stop (coordinator)
+
+`OrchCaptureLink::serviceAutoSave()` runs each worker-loop tick in coordinator mode. It tracks a
+"playing" state = the coordinator's own `transportPlayingUi` **OR** any connected lane's reported
+`playing` (so it works even if the coordinator instance's track isn't being processed by the host).
+On the playing→stopped edge, with `autoSaveOnStop` on, it arms a timer for
+`kAutoSaveSettleMs` (7 s) — long enough for every client's 3 s poll to have pushed its final take.
+When the timer fires it writes `OrchCapture_session_<yyyymmdd_hhmmss>.mid` (full merged export, no
+per-lane exclude) to `autoSaveFolder` and calls `processor.noteAutoSave()`, which the editor shows.
+A transport restart before the timer fires cancels the pending save. All file I/O is on the worker
+thread; the editor need not be open. The Transport Companion already stops Bitwig at blueprint end,
+so in the real rig "stopped" ≈ "blueprint finished".
 
 ---
 

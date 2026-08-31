@@ -25,6 +25,7 @@ OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
     coordinatorParam = parameters.getRawParameterValue ("coordinator");
     quantizeGridParam = parameters.getRawParameterValue ("quantizeGrid");
     mergedContentParam = parameters.getRawParameterValue ("mergedContent");
+    autoSaveOnStopParam = parameters.getRawParameterValue ("autoSaveOnStop");
 
     capturedNotes.reserve (4096);
     openNotes.reserve (256);
@@ -78,6 +79,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::c
     params.push_back (std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID { "mergedContent", 1 }, "Merged Content",
         juce::StringArray { "Notes + KS", "Notes only", "KS only" }, 0));
+
+    // Coordinator: write the merged rig SMF to the auto-save folder whenever the
+    // transport stops (hands-free capture runs). Off by default.
+    params.push_back (std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID { "autoSaveOnStop", 1 }, "Auto-save on stop", false));
 
     return { params.begin(), params.end() };
 }
@@ -370,32 +376,67 @@ ocap::MergedExportOptions OrchCaptureAudioProcessor::buildMergedExportOptions() 
 
 juce::String OrchCaptureAudioProcessor::getMarkersText() const
 {
-    return parameters.state.getProperty ("markersText", juce::String()).toString();
+    const juce::ScopedLock sl (metaTextLock);
+    return markersText;
 }
 
 juce::String OrchCaptureAudioProcessor::getScoreOrderText() const
 {
-    return parameters.state.getProperty ("scoreOrderText", juce::String()).toString();
+    const juce::ScopedLock sl (metaTextLock);
+    return scoreOrderText;
 }
 
 juce::String OrchCaptureAudioProcessor::getTempoText() const
 {
-    return parameters.state.getProperty ("tempoText", juce::String()).toString();
+    const juce::ScopedLock sl (metaTextLock);
+    return tempoText;
+}
+
+juce::String OrchCaptureAudioProcessor::getAutoSaveFolder() const
+{
+    const juce::ScopedLock sl (metaTextLock);
+    return autoSaveFolder;
 }
 
 void OrchCaptureAudioProcessor::setMarkersText (const juce::String& text)
 {
+    { const juce::ScopedLock sl (metaTextLock); markersText = text; }
     parameters.state.setProperty ("markersText", text, nullptr);
 }
 
 void OrchCaptureAudioProcessor::setScoreOrderText (const juce::String& text)
 {
+    { const juce::ScopedLock sl (metaTextLock); scoreOrderText = text; }
     parameters.state.setProperty ("scoreOrderText", text, nullptr);
 }
 
 void OrchCaptureAudioProcessor::setTempoText (const juce::String& text)
 {
+    { const juce::ScopedLock sl (metaTextLock); tempoText = text; }
     parameters.state.setProperty ("tempoText", text, nullptr);
+}
+
+void OrchCaptureAudioProcessor::setAutoSaveFolder (const juce::String& path)
+{
+    { const juce::ScopedLock sl (metaTextLock); autoSaveFolder = path; }
+    parameters.state.setProperty ("autoSaveFolder", path, nullptr);
+}
+
+bool OrchCaptureAudioProcessor::isAutoSaveOnStopParamOn() const
+{
+    return autoSaveOnStopParam != nullptr && autoSaveOnStopParam->load() >= 0.5f;
+}
+
+void OrchCaptureAudioProcessor::noteAutoSave (const juce::String& fileName)
+{
+    { const juce::ScopedLock sl (metaTextLock); lastAutoSaveName = fileName; }
+    autoSaveCountUi.fetch_add (1);
+}
+
+juce::String OrchCaptureAudioProcessor::getLastAutoSaveNameForUi() const
+{
+    const juce::ScopedLock sl (metaTextLock);
+    return lastAutoSaveName;
 }
 
 juce::AudioProcessorEditor* OrchCaptureAudioProcessor::createEditor()
@@ -427,6 +468,12 @@ void OrchCaptureAudioProcessor::setStateInformation (const void* data, int sizeI
     if (auto xml = std::unique_ptr<juce::XmlElement> (getXmlFromBinary (data, sizeInBytes)))
         if (xml->hasTagName (parameters.state.getType()))
             parameters.replaceState (juce::ValueTree::fromXml (*xml));
+
+    const juce::ScopedLock sl (metaTextLock);
+    markersText = parameters.state.getProperty ("markersText", juce::String()).toString();
+    tempoText = parameters.state.getProperty ("tempoText", juce::String()).toString();
+    scoreOrderText = parameters.state.getProperty ("scoreOrderText", juce::String()).toString();
+    autoSaveFolder = parameters.state.getProperty ("autoSaveFolder", juce::String()).toString();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
