@@ -10,6 +10,31 @@ namespace
     constexpr size_t kMaxCapturedNotes = 200000; // ~hours of a mono part; a safety rail
     constexpr size_t kMaxOpenNotes = 4096;
     constexpr double kRewindBeatsForNewTake = 0.5;
+
+    // OrchHarp drops a "orchharp-pedals-<tag>.txt" of "bar:label" lines in the
+    // temp dir on transport stop (one file per instance). Fold the fresh ones
+    // into the section markers so the harp's pedal changes reach the score.
+    void mergeOrchHarpPedalMarkers (std::vector<ocap::SectionMarker>& markers)
+    {
+        const auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory);
+        const auto now = juce::Time::getCurrentTime();
+
+        for (const auto& f : tempDir.findChildFiles (juce::File::findFiles, false,
+                                                     "orchharp-pedals-*.txt"))
+        {
+            if ((now - f.getLastModificationTime()).inSeconds() > 120.0)
+                continue; // stale - a previous session
+
+            for (const auto& m : ocap::parseSectionMarkers (f.loadFileAsString()))
+            {
+                const bool dup = std::any_of (markers.begin(), markers.end(),
+                    [&] (const ocap::SectionMarker& e)
+                    { return e.label == m.label && std::abs (e.bar - m.bar) < 0.01; });
+                if (! dup)
+                    markers.push_back (m);
+            }
+        }
+    }
 }
 
 OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
@@ -368,6 +393,7 @@ ocap::MergedExportOptions OrchCaptureAudioProcessor::buildMergedExportOptions() 
     options.content = static_cast<ocap::MergedContent> (content);
 
     options.markers = ocap::parseSectionMarkers (getMarkersText());
+    mergeOrchHarpPedalMarkers (options.markers);
     options.tempoChanges = ocap::parseTempoMarks (getTempoText());
     options.scoreOrder = ocap::parseScoreOrder (getScoreOrderText());
 

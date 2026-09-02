@@ -267,6 +267,11 @@ a straight-to-Dorico file; KS only = feed for the music21 articulation pass.
   Dorico. Each becomes a `textMetaEvent(6, label)` on the merged tempo track at
   `(bar - 1) * barLengthPpq` (4/4 assumed). Malformed tokens are skipped. **Not** read from Bitwig's
   arrangement markers — no VST3 API for that.
+- **OrchHarp pedal markers** — `buildMergedExportOptions` also scans `%TEMP%` for
+  `orchharp-pedals-*.txt` files modified in the last 120 s (OrchHarp writes one per instance on
+  transport stop, same `bar:label` format) and folds their lines into `options.markers`, skipping
+  entries that duplicate an existing `(bar, label)`. So a harp's pedal changes reach the score
+  without Dorico's semi-automatic Calculate Harp Pedals. No config — it just picks up the file.
 - **`tempoText`** — `"bar:bpm"` tokens (`ocap::parseTempoMarks`), same 1-indexed bars. Each becomes a
   tempo meta event; an anchor tempo at tick 0 is always present. Empty → the single `tempoBpm`.
   Note positions don't need this (they're musical ppq); it only sets the score's tempo marks.
