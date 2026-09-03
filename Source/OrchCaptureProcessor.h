@@ -177,6 +177,7 @@ private:
     std::atomic<bool> transportPlayingUi { false };
     std::atomic<int> lastCapturedNoteUi { -1 };
     std::atomic<double> currentBpmUi { 120.0 };
+    std::atomic<double> currentBeatsPerBarUi { 4.0 }; // host time signature, in quarter-note beats
     std::atomic<int> takeGenerationUi { 0 };
     std::atomic<int> autoSaveCountUi { 0 };
 

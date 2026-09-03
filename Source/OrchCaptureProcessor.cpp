@@ -222,6 +222,9 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                 blockStartPpq = *ppq;
                 havePpq = true;
             }
+
+            if (const auto ts = pos->getTimeSignature(); ts && ts->numerator > 0 && ts->denominator > 0)
+                currentBeatsPerBarUi.store (ts->numerator * 4.0 / ts->denominator);
         }
     }
 
@@ -386,7 +389,9 @@ ocap::MergedExportOptions OrchCaptureAudioProcessor::buildMergedExportOptions() 
     options.sessionName = "OrchCapture session";
     options.tempoBpm = juce::jmax (1.0, currentBpmUi.load());
     options.ticksPerQuarterNote = 960;
-    options.barLengthPpq = 4.0;
+    // Bar length from the host time signature (quarter-note beats per bar).
+    // Constant-meter assumption - a mid-piece meter change is not tracked.
+    options.barLengthPpq = juce::jlimit (0.25, 64.0, currentBeatsPerBarUi.load());
 
     const int content = mergedContentParam != nullptr
         ? juce::jlimit (0, 2, juce::roundToInt (mergedContentParam->load())) : 0;
