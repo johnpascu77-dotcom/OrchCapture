@@ -145,6 +145,7 @@ private:
     std::atomic<float>* quantizeGridParam = nullptr;
     std::atomic<float>* mergedContentParam = nullptr;
     std::atomic<float>* autoSaveOnStopParam = nullptr;
+    std::atomic<float>* lookaheadCompensationCcParam = nullptr;
 
     double sampleRate = 44100.0;
 
@@ -155,6 +156,14 @@ private:
     std::vector<ocap::CapturedNote> capturedNotes;
     std::vector<OpenNote> openNotes;
     double takeStartPpq = 0.0;
+
+    // A pre-capture plugin (e.g. OrchPiano's lookahead planning engine) can
+    // report a constant output delay, in beats, on lookaheadCompensationCcParam
+    // (observed only - the CC still passes through untouched, this plugin stays
+    // transparent). Subtracted from every captured onset/release so the take
+    // lands at the music's real position instead of `delay` beats late. Reset to
+    // 0 at the start of every take; a fresh CC re-establishes it within a block.
+    double capturedDelayBeats = 0.0;
 
     // Set by clearTake() on the message thread; consumed at the top of the
     // next processBlock so the reset lands with a known playhead position.

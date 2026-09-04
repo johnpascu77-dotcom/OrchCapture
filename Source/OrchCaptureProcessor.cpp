@@ -51,6 +51,7 @@ OrchCaptureAudioProcessor::OrchCaptureAudioProcessor()
     quantizeGridParam = parameters.getRawParameterValue ("quantizeGrid");
     mergedContentParam = parameters.getRawParameterValue ("mergedContent");
     autoSaveOnStopParam = parameters.getRawParameterValue ("autoSaveOnStop");
+    lookaheadCompensationCcParam = parameters.getRawParameterValue ("lookaheadCompensationCc");
 
     capturedNotes.reserve (4096);
     openNotes.reserve (256);
@@ -110,6 +111,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout OrchCaptureAudioProcessor::c
     params.push_back (std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "autoSaveOnStop", 1 }, "Auto-save on stop", false));
 
+    // A pre-capture plugin sitting upstream on this track (e.g. OrchPiano's
+    // lookahead planning engine) can report a constant output delay, in beats,
+    // on this CC (0..16 fits directly as the CC value; 0 CC# = off). Observed
+    // only - the CC still passes through untouched. See OrchPiano's
+    // `delayCompensationCc` param, default matches (113).
+    params.push_back (std::make_unique<juce::AudioParameterInt>(
+        juce::ParameterID { "lookaheadCompensationCc", 1 }, "Delay Compensation CC# (0=off)", 0, 127, 113));
+
     return { params.begin(), params.end() };
 }
 
@@ -137,6 +146,7 @@ void OrchCaptureAudioProcessor::resetTake (double takeOriginPpq)
     capturedNotes.clear();
     openNotes.clear();
     takeStartPpq = takeOriginPpq;
+    capturedDelayBeats = 0.0;
     lastCapturedNoteUi.store (-1);
     takeNoteCountUi.store (0);
     takeKeyswitchCountUi.store (0);
@@ -166,8 +176,8 @@ void OrchCaptureAudioProcessor::finalizeOpenNotes (double ppqOff)
         n.channel = open.channel;
         n.note = open.note;
         n.velocity = open.velocity;
-        n.ppqOn = juce::jmax (0.0, open.ppqOn - takeStartPpq);
-        n.ppqOff = juce::jmax (n.ppqOn, ppqOff - takeStartPpq);
+        n.ppqOn = juce::jmax (0.0, open.ppqOn - takeStartPpq - capturedDelayBeats);
+        n.ppqOff = juce::jmax (n.ppqOn, ppqOff - takeStartPpq - capturedDelayBeats);
         n.isKeyswitch = noteInKeyswitchZone (open.note);
         capturedNotes.push_back (n);
     }
@@ -270,7 +280,16 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             const auto message = metadata.getMessage();
             const double eventPpq = blockStartPpq + metadata.samplePosition * ppqPerSample;
 
-            if (message.isNoteOn() && message.getVelocity() > 0)
+            if (message.isController())
+            {
+                // Observe only - this CC still passes through untouched below,
+                // same as everything else (this plugin stays transparent).
+                const int compCc = lookaheadCompensationCcParam != nullptr
+                    ? juce::roundToInt (lookaheadCompensationCcParam->load()) : 0;
+                if (compCc > 0 && message.getControllerNumber() == compCc)
+                    capturedDelayBeats = static_cast<double> (message.getControllerValue());
+            }
+            else if (message.isNoteOn() && message.getVelocity() > 0)
             {
                 if (openNotes.size() >= kMaxOpenNotes)
                     openNotes.erase (openNotes.begin());
@@ -296,8 +315,8 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
                     n.channel = it->channel;
                     n.note = it->note;
                     n.velocity = it->velocity;
-                    n.ppqOn = juce::jmax (0.0, it->ppqOn - takeStartPpq);
-                    n.ppqOff = juce::jmax (n.ppqOn, eventPpq - takeStartPpq);
+                    n.ppqOn = juce::jmax (0.0, it->ppqOn - takeStartPpq - capturedDelayBeats);
+                    n.ppqOff = juce::jmax (n.ppqOn, eventPpq - takeStartPpq - capturedDelayBeats);
                     n.isKeyswitch = noteInKeyswitchZone (it->note);
                     capturedNotes.push_back (n);
                 }
