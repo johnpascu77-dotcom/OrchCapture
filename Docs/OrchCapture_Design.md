@@ -104,8 +104,38 @@ working in Bitwig 2026-08-30.
 ### Export (`OrchCaptureTakeLogic`, pure)
 
 `writeTakeMidi(notes, options, stream)` → Format-1 SMF, 960 tpqn:
-- **Track 0** — track-name text meta + tempo meta.
+- **Track 0** — track-name text meta + tempo meta + live-captured time-signature meta events (see
+  below; empty `options.timeSigChanges` writes none at all, no fabricated 4/4).
 - **Track 1 (..2)** — one or two note tracks, per `options.keyswitchMode` (see §5).
+
+### Live time-signature capture (2026-09-06)
+
+**Problem**: OrchCapture was measure-agnostic — every exported take showed 4/4 in Dorico regardless
+of the real meter in Bitwig, because nothing captured or wrote a time signature at all.
+
+**Fix**: `AudioPlayHead::PositionInfo::getTimeSignature()` (JUCE 9, `juce_audio_basics`) does report
+the host's current numerator/denominator — Bitwig's own arrangement time-signature track reaches the
+plugin through it. It's pull-only (no change notification), so `processBlock` polls it every block
+(same place `blockStartPpq` is read) and diffs against the last-seen value, appending an
+`ocap::TimeSigMark { ppq, numerator, denominator }` (ppq relative to the take's own start, same
+convention as `CapturedNote` - NOT a bar number, which would need the meter to convert, circularly)
+to `capturedTimeSigChanges` on any change. `lastTimeSigNumerator/Denominator` reset to `0` in
+`resetTake()` so every take's *first* observation always registers as a change too, anchoring the
+starting meter at ppq 0 - not just later mid-take changes.
+
+`snapshotTake()` has a `snapshotTimeSigChanges()` sibling (same `captureLock` pattern) for the editor
+to copy the list out before export; both `writeTakeToTempFile()` (drag-out) and the Save-As handler
+set `options.timeSigChanges` from it before calling `writeTakeMidi`. `tempoMetaTrack` (shared by both
+`writeTakeMidi` and `writeMergedTakeMidi`) writes one `MidiMessage::timeSignatureMetaEvent(num, den)`
+per mark at `mark.ppq * tpqn` - a ready-made JUCE primitive, no manual `FF 58` byte-writing needed.
+
+**Scope**: single-take export (`TakeExportOptions`) only, matching the reported problem (a dragged-in
+take showing 4/4). `MergedExportOptions`'s own meter is still the hand-set `barLengthPpq` (§ "Section
+markers…" above still says "4/4 assumed") - wiring live capture into the merged/coordinator path is a
+separate, not-yet-done follow-up, not automatically covered by this fix.
+
+Verified: `OrchCaptureTakeLogicCheck` covers both the "no captured changes → no meta event" case and a
+real starting-meter-plus-mid-take-change case (6/8 → 4/4 at beat 24) landing at the correct ticks.
 
 `normalizeTake` drops out-of-range pitches, clamps onsets to ≥ 0, forces a minimum positive note
 length, sorts by onset then pitch, and preserves `isKeyswitch`. Exercised directly by

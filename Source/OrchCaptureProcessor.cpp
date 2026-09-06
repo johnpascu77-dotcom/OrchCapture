@@ -147,6 +147,9 @@ void OrchCaptureAudioProcessor::resetTake (double takeOriginPpq)
     openNotes.clear();
     takeStartPpq = takeOriginPpq;
     capturedDelayBeats = 0.0;
+    capturedTimeSigChanges.clear();
+    lastTimeSigNumerator = 0;
+    lastTimeSigDenominator = 0;
     lastCapturedNoteUi.store (-1);
     takeNoteCountUi.store (0);
     takeKeyswitchCountUi.store (0);
@@ -217,6 +220,7 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
     bool havePpq = false;
     double bpm = currentBpmUi.load();
     double blockStartPpq = lastBlockEndPpq;
+    int tsNumerator = 0, tsDenominator = 0; // 0 = host didn't report one this block
 
     if (auto* transport = getPlayHead())
     {
@@ -234,7 +238,11 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
             }
 
             if (const auto ts = pos->getTimeSignature(); ts && ts->numerator > 0 && ts->denominator > 0)
+            {
                 currentBeatsPerBarUi.store (ts->numerator * 4.0 / ts->denominator);
+                tsNumerator = ts->numerator;
+                tsDenominator = ts->denominator;
+            }
         }
     }
 
@@ -275,6 +283,20 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
 
     if (playing && havePpq)
     {
+        // Host meter, live: JUCE's playhead is pull-only (no change
+        // notification), so detect a change by diffing against the last
+        // value seen THIS take (lastTimeSig*/= 0 after resetTake() forces
+        // the very first observation to register, capturing the starting
+        // meter too, not just later changes).
+        if (tsNumerator > 0 && tsDenominator > 0
+            && (tsNumerator != lastTimeSigNumerator || tsDenominator != lastTimeSigDenominator))
+        {
+            capturedTimeSigChanges.push_back ({ juce::jmax (0.0, blockStartPpq - takeStartPpq),
+                                                tsNumerator, tsDenominator });
+            lastTimeSigNumerator = tsNumerator;
+            lastTimeSigDenominator = tsDenominator;
+        }
+
         for (const auto metadata : midiMessages)
         {
             const auto message = metadata.getMessage();
@@ -360,6 +382,12 @@ std::vector<ocap::CapturedNote> OrchCaptureAudioProcessor::snapshotTake() const
 {
     const juce::SpinLock::ScopedLockType lock (captureLock);
     return capturedNotes;
+}
+
+std::vector<ocap::TimeSigMark> OrchCaptureAudioProcessor::snapshotTimeSigChanges() const
+{
+    const juce::SpinLock::ScopedLockType lock (captureLock);
+    return capturedTimeSigChanges;
 }
 
 void OrchCaptureAudioProcessor::clearTake()

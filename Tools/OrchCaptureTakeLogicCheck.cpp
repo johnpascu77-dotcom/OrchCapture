@@ -48,6 +48,7 @@ namespace
         double firstNoteOnTick = -1.0;
         juce::String firstText;
         int numTracks = 0;
+        std::vector<std::tuple<double, int, int>> timeSigs; // (tick, numerator, denominator)
     };
 
     TrackScan scan (const juce::MemoryBlock& data, int trackIndex)
@@ -76,6 +77,12 @@ namespace
             }
             if (m.isNoteOff())
                 ++out.noteOffs;
+            if (m.isTimeSignatureMetaEvent())
+            {
+                int num = 0, den = 0;
+                m.getTimeSignatureInfo (num, den);
+                out.timeSigs.push_back ({ m.getTimeStamp(), num, den });
+            }
         }
         return out;
     }
@@ -169,6 +176,50 @@ int main()
         const auto notes = scan (data, 1);
         check (notes.numTracks == 2, "empty take writes a 2-track file");
         check (notes.noteOns == 0, "empty take writes no note-ons");
+    }
+
+    // 2026-09-06: live time-signature capture. OrchCaptureProcessor polls the
+    // host playhead every block and diffs against the last-seen meter (JUCE's
+    // AudioPlayHead has no change notification, only a pull query), recording
+    // each change as a TimeSigMark. This is that captured list reaching the
+    // exported file as real FF 58 meta-events - the fix for OrchCapture being
+    // "measure agnostic" in Dorico (dragged-in takes always showed 4/4).
+    {
+        // No captured changes at all (e.g. an older take, or a host that never
+        // reported a time signature) -> no time-sig meta event is fabricated.
+        // Writing a guessed 4/4 would be less honest than leaving it unset.
+        std::vector<ocap::CapturedNote> take { makeNote (0.0, 1.0, 60) };
+        ocap::TakeExportOptions opts;
+        opts.ticksPerQuarterNote = 960;
+
+        juce::MemoryOutputStream mos;
+        ocap::writeTakeMidi (take, opts, mos);
+        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+        check (scan (data, 0).timeSigs.empty(), "writeTakeMidi: no timeSigChanges -> no time-sig meta event at all");
+    }
+    {
+        // The starting meter (a mark at ppq 0, as resetTake()'s sentinel
+        // guarantees) plus one real mid-take meter change - a 6/8 piece
+        // switching to 4/4 at beat 24.
+        std::vector<ocap::CapturedNote> take { makeNote (0.0, 1.0, 60) };
+        ocap::TakeExportOptions opts;
+        opts.ticksPerQuarterNote = 960;
+        opts.timeSigChanges = { { 0.0, 6, 8 }, { 24.0, 4, 4 } };
+
+        juce::MemoryOutputStream mos;
+        ocap::writeTakeMidi (take, opts, mos);
+        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+        const auto meta = scan (data, 0);
+        check (meta.timeSigs.size() == 2, "writeTakeMidi: 2 timeSigChanges -> 2 time-sig meta events");
+        if (meta.timeSigs.size() == 2)
+        {
+            const auto& [tick0, num0, den0] = meta.timeSigs[0];
+            const auto& [tick1, num1, den1] = meta.timeSigs[1];
+            check (std::abs (tick0 - 0.0) < 1.0e-6 && num0 == 6 && den0 == 8,
+                   "writeTakeMidi: starting meter 6/8 lands at tick 0");
+            check (std::abs (tick1 - 24.0 * 960) < 1.0e-6 && num1 == 4 && den1 == 4,
+                   "writeTakeMidi: meter change to 4/4 at beat 24 lands at the right tick");
+        }
     }
 
     // normalizeTake preserves the isKeyswitch flag.

@@ -590,7 +590,8 @@ juce::File OrchCaptureAudioProcessorEditor::writeTakeToTempFile()
     if (take.empty())
         return {};
 
-    const auto options = audioProcessor.buildExportOptions();
+    auto options = audioProcessor.buildExportOptions();
+    options.timeSigChanges = audioProcessor.snapshotTimeSigChanges();
     const auto file = tempMidiPath (options.trackName);
 
     juce::FileOutputStream stream (file);
@@ -682,7 +683,9 @@ void OrchCaptureAudioProcessorEditor::saveToFolder()
             const auto take = audioProcessor.snapshotTake();
             if (take.empty())
                 return;
-            ocap::writeTakeMidi (take, audioProcessor.buildExportOptions(), stream);
+            auto options = audioProcessor.buildExportOptions();
+            options.timeSigChanges = audioProcessor.snapshotTimeSigChanges();
+            ocap::writeTakeMidi (take, options, stream);
         }
 
         stream.flush();

@@ -31,6 +31,21 @@ namespace ocap
         KeyswitchOnly   // keyswitches only (track named "<name> KS")
     };
 
+    // A host time-signature change, captured live during recording (see
+    // OrchCaptureProcessor::processBlock, which polls AudioPlayHead::
+    // PositionInfo::getTimeSignature() every block and diffs it against the
+    // last-seen value - JUCE has no change notification for this, only a
+    // pull query). ppq is relative to the take's own start, same convention
+    // as CapturedNote, NOT a bar number: a bar-based mark (like TempoMark
+    // below) requires already knowing the meter to convert bar -> ppq, which
+    // is circular for something whose whole job is telling you the meter.
+    struct TimeSigMark
+    {
+        double ppq = 0.0;
+        int numerator = 4;
+        int denominator = 4;
+    };
+
     struct TakeExportOptions
     {
         juce::String trackName { "OrchCapture" };
@@ -39,6 +54,7 @@ namespace ocap
         KeyswitchExportMode keyswitchMode = KeyswitchExportMode::Inline;
         int tapRole = 0;             // 0 = Performance, 1 = Articulation - merged-export ordering only
         double quantizeGridPpq = 0.0; // 0 = as performed; else snap onset+release to this grid
+        std::vector<TimeSigMark> timeSigChanges; // live-captured; empty -> no time-sig meta at all (host default, e.g. Dorico's 4/4)
     };
 
     // One take plus how it wants to be laid out - the unit the coordinator

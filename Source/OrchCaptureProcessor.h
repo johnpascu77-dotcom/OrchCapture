@@ -120,6 +120,7 @@ public:
     void clearTake();
 
     ocap::TakeExportOptions buildExportOptions() const;
+    std::vector<ocap::TimeSigMark> snapshotTimeSigChanges() const;
 
 private:
     struct OpenNote
@@ -156,6 +157,16 @@ private:
     std::vector<ocap::CapturedNote> capturedNotes;
     std::vector<OpenNote> openNotes;
     double takeStartPpq = 0.0;
+
+    // Live-captured host time-signature changes for the current take (audio
+    // thread appends in processBlock, guarded by captureLock like
+    // capturedNotes). lastTimeSig*/= 0 is the "not yet seen this take"
+    // sentinel, reset in resetTake() so every take's very first observation
+    // always registers as a change and gets recorded at its actual ppq -
+    // guaranteeing the STARTING meter is captured, not just later changes.
+    std::vector<ocap::TimeSigMark> capturedTimeSigChanges;
+    int lastTimeSigNumerator = 0;
+    int lastTimeSigDenominator = 0;
 
     // A pre-capture plugin (e.g. OrchPiano's lookahead planning engine) can
     // report a constant output delay, in beats, on lookaheadCompensationCcParam

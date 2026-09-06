@@ -183,7 +183,8 @@ namespace ocap
         juce::MidiMessageSequence tempoMetaTrack (const juce::String& name, double tempoBpm,
                                                  const std::vector<SectionMarker>& markers = {},
                                                  const std::vector<TempoMark>& tempoChanges = {},
-                                                 double barLengthPpq = 4.0, int tpqn = 960)
+                                                 double barLengthPpq = 4.0, int tpqn = 960,
+                                                 const std::vector<TimeSigMark>& timeSigChanges = {})
         {
             const double barPpq = juce::jmax (0.25, barLengthPpq);
 
@@ -215,6 +216,17 @@ namespace ocap
                 const double tick = juce::jmax (0.0, m.bar - 1.0) * barPpq * tpqn;
                 meta.addEvent (juce::MidiMessage::textMetaEvent (6, m.label), tick); // 6 = marker
             }
+
+            // Live-captured host meter, in ppq relative to the take's start
+            // (see TimeSigMark) - unlike tempo/markers above, there is no
+            // "default to 4/4 at tick 0" fallback: an empty list means we
+            // never actually observed a time signature (e.g. the host never
+            // reported one), and writing a fabricated 4/4 would be less
+            // honest than just leaving it unset and letting the importer
+            // apply its own default.
+            for (const auto& ts : timeSigChanges)
+                meta.addEvent (juce::MidiMessage::timeSignatureMetaEvent (ts.numerator, ts.denominator),
+                              juce::jmax (0.0, ts.ppq) * tpqn);
 
             meta.updateMatchedPairs();
             return meta;
@@ -264,7 +276,8 @@ namespace ocap
 
         juce::MidiFile midiFile;
         midiFile.setTicksPerQuarterNote (tpqn);
-        midiFile.addTrack (tempoMetaTrack (options.trackName, options.tempoBpm));
+        midiFile.addTrack (tempoMetaTrack (options.trackName, options.tempoBpm, {}, {}, 4.0, tpqn,
+                                           options.timeSigChanges));
 
         for (const auto& track : planNoteTracks (notes, options))
             appendNoteTrack (midiFile, track, tpqn);
