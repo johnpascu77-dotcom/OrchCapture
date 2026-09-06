@@ -76,6 +76,17 @@ namespace ocap
         return notes;
     }
 
+    std::vector<TimeSigMark> quantizeTimeSigMarks (std::vector<TimeSigMark> marks, double gridPpq)
+    {
+        if (gridPpq <= 0.0)
+            return marks;
+
+        for (auto& m : marks)
+            m.ppq = juce::jmax (0.0, std::round (m.ppq / gridPpq) * gridPpq);
+
+        return marks;
+    }
+
     std::vector<SectionMarker> parseSectionMarkers (const juce::String& text)
     {
         std::vector<SectionMarker> out;
@@ -276,8 +287,12 @@ namespace ocap
 
         juce::MidiFile midiFile;
         midiFile.setTicksPerQuarterNote (tpqn);
+        // Same grid as planNoteTracks below applies to notes - otherwise an
+        // enabled quantize grid snaps note onsets forward/back onto clean
+        // points but leaves the time-sig mark at its raw position, visibly
+        // misaligning the meter change from the notes it introduces.
         midiFile.addTrack (tempoMetaTrack (options.trackName, options.tempoBpm, {}, {}, 4.0, tpqn,
-                                           options.timeSigChanges));
+                                           quantizeTimeSigMarks (options.timeSigChanges, options.quantizeGridPpq)));
 
         for (const auto& track : planNoteTracks (notes, options))
             appendNoteTrack (midiFile, track, tpqn);

@@ -221,6 +221,32 @@ int main()
                    "writeTakeMidi: meter change to 4/4 at beat 24 lands at the right tick");
         }
     }
+    {
+        // Live-found bug: a raw-captured mark at an off-grid ppq (19.945, a
+        // realistic mid-block capture) combined with an enabled 1/16 quantize
+        // grid used to leave the meta-event at its raw position while note
+        // onsets got snapped onto the grid - the meter change landed visibly
+        // later than the notes it introduces ("with a 16th note delay",
+        // reported against a real Bitwig take). The mark must land on the
+        // SAME grid point notes would.
+        std::vector<ocap::CapturedNote> take { ocap::CapturedNote { 20.0, 20.5, 60, 100, 1, false } };
+        ocap::TakeExportOptions opts;
+        opts.ticksPerQuarterNote = 960;
+        opts.quantizeGridPpq = 0.25; // 1/16
+        opts.timeSigChanges = { { 19.945, 6, 8 } }; // rounds to 20.0 at a 1/16 (0.25) grid
+
+        juce::MemoryOutputStream mos;
+        ocap::writeTakeMidi (take, opts, mos);
+        juce::MemoryBlock data (mos.getData(), mos.getDataSize());
+        const auto meta = scan (data, 0);
+        check (meta.timeSigs.size() == 1, "writeTakeMidi: quantized take still writes its one time-sig mark");
+        if (meta.timeSigs.size() == 1)
+        {
+            const auto& [tick, num, den] = meta.timeSigs[0];
+            check (std::abs (tick - 20.0 * 960) < 1.0e-6 && num == 6 && den == 8,
+                   "writeTakeMidi: time-sig mark snaps to the same 1/16 grid as note onsets");
+        }
+    }
 
     // normalizeTake preserves the isKeyswitch flag.
     {

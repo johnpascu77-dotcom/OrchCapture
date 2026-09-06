@@ -137,6 +137,26 @@ separate, not-yet-done follow-up, not automatically covered by this fix.
 Verified: `OrchCaptureTakeLogicCheck` covers both the "no captured changes → no meta event" case and a
 real starting-meter-plus-mid-take-change case (6/8 → 4/4 at beat 24) landing at the correct ticks.
 
+**Live-tested same day, found a real offset**: user's first real take (6/8, a full orchestral rig)
+showed the meter change landing correctly but "with a 16th note delay" against the notes it
+introduced. Traced to two gaps between how the new time-sig capture and existing note capture
+computed their ppq, both fixed:
+- **`capturedDelayBeats` was applied to every note's onset/release but not to the time-sig mark.**
+  A lookahead-compensated take (OrchPiano's planning engine reporting its delay on
+  `lookaheadCompensationCc`) shifts notes back by that delay; the mark, missing the same
+  subtraction, stayed at its uncompensated position. Fixed: `processBlock` now subtracts
+  `capturedDelayBeats` when recording a `TimeSigMark`, same as note capture already does.
+- **`options.quantizeGridPpq` snapped note onsets onto a clean grid but never touched the time-sig
+  mark.** With quantize enabled, notes land on grid points while the mark sat at its raw ppq,
+  visibly misaligning the barline from the notes now starting on it. Fixed: new
+  `quantizeTimeSigMarks` (same round-to-nearest-grid as `quantizeTake`), applied in `writeTakeMidi`
+  before the mark reaches `tempoMetaTrack`.
+
+Both fixes verified with `OrchCaptureTakeLogicCheck` against the actual real capture's numbers
+(pulled from the exported .mid file with `mido`, not guessed) before committing to either as *the*
+cause - the real take's tick gap didn't cleanly match one 16th on its own, so both gaps were fixed
+together rather than picking one from a hunch.
+
 `normalizeTake` drops out-of-range pitches, clamps onsets to ≥ 0, forces a minimum positive note
 length, sorts by onset then pitch, and preserves `isKeyswitch`. Exercised directly by
 `OrchCaptureTakeLogicCheck` (console app, `juce_audio_basics` only).

@@ -124,6 +124,16 @@ namespace ocap
     // untouched. Pure.
     std::vector<CapturedNote> quantizeTake (std::vector<CapturedNote> notes, double gridPpq);
 
+    // Snap every mark's ppq to the nearest multiple of gridPpq, same grid and
+    // rounding as quantizeTake. gridPpq <= 0 returns the marks untouched.
+    // writeTakeMidi applies this with the SAME options.quantizeGridPpq used
+    // for notes - without it, an enabled quantize grid snaps note onsets to
+    // clean grid points but leaves a live-captured time-sig mark at its raw,
+    // unsnapped position, visibly misaligning the meter change from the notes
+    // it introduces (live-found: reported as the meter landing "with a 16th
+    // note delay" relative to the notes that were quantized onto the grid).
+    std::vector<TimeSigMark> quantizeTimeSigMarks (std::vector<TimeSigMark> marks, double gridPpq);
+
     // Parse "bar:label" tokens (one per line, or comma-separated) into markers.
     // Bar is 1-indexed. Malformed tokens are skipped. e.g. "1:Intro, 9:B".
     std::vector<SectionMarker> parseSectionMarkers (const juce::String& text);

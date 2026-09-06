@@ -288,10 +288,19 @@ void OrchCaptureAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, 
         // value seen THIS take (lastTimeSig*/= 0 after resetTake() forces
         // the very first observation to register, capturing the starting
         // meter too, not just later changes).
+        //
+        // Must subtract capturedDelayBeats, same as every captured note's
+        // onset/release below - otherwise a lookahead-compensated take
+        // (OrchPiano's planning engine reporting its delay on
+        // lookaheadCompensationCc) shifts every note back by that delay but
+        // leaves the time-sig mark at its uncompensated position, landing
+        // the meter change visibly later than the notes it introduces.
+        // Live-found: user reported the change landing "with a 16th note
+        // delay" on a real take.
         if (tsNumerator > 0 && tsDenominator > 0
             && (tsNumerator != lastTimeSigNumerator || tsDenominator != lastTimeSigDenominator))
         {
-            capturedTimeSigChanges.push_back ({ juce::jmax (0.0, blockStartPpq - takeStartPpq),
+            capturedTimeSigChanges.push_back ({ juce::jmax (0.0, blockStartPpq - takeStartPpq - capturedDelayBeats),
                                                 tsNumerator, tsDenominator });
             lastTimeSigNumerator = tsNumerator;
             lastTimeSigDenominator = tsDenominator;
