@@ -10,7 +10,7 @@ juce_add_plugin(OrchCapture
     PLUGIN_MANUFACTURER_CODE Jpas
     PLUGIN_CODE Ocap
 
-    FORMATS VST3
+    FORMATS VST3 Standalone
 
     PRODUCT_NAME "OrchCapture"
     PLUGIN_NAME "OrchCapture"
